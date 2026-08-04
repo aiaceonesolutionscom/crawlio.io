@@ -1,20 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import {
-  MailIcon,
-  MessageSquareIcon,
-  PencilIcon,
-  PlusIcon,
-  SearchIcon,
-  Trash2Icon } from
-'lucide-react';
-import { PageHeader } from '../../components/dashboard/PageHeader';
-import { Button } from '../../components/ui/Button';
-import { useAuth } from '../../contexts/AuthContext';
-import { useDashboardChrome } from '../../hooks/useDashboardChrome';
-import { LEADS } from '../../data/leads';
-import { can } from '../../utils/plan';
-import { cn } from '../../utils/cn';
-import type { LeadStatus } from '../../types';
+import { MailIcon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
+import { PageHeader } from '../../../shared/layout/PageHeader';
+import { Button } from '../../../shared/ui/Button';
+import { useAuth } from '../../../contexts/AuthContext';
+import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
+import { LEADS } from '../../../data/leads';
+import { cn } from '../../../shared/utils/cn';
+import type { LeadStatus } from '../../../types';
 
 const STATUS_STYLES: Record<LeadStatus, string> = {
   New: 'border-ink-600 text-chalk-dim',
@@ -30,21 +22,10 @@ const FREE_ROW_LIMIT = 6;
 export function Leads() {
   const { user } = useAuth();
   const { openUpgrade } = useDashboardChrome();
-  const [query, setQuery] = useState('');
+  const [query] = useState('');
   if (!user) return null;
 
-  const plan = user.workspace.plan;
-  const searchEnabled = plan !== 'free';
-  const whatsappEnabled = can(plan, 'whatsapp');
-
-  const rows = useMemo(() => {
-    const filtered = searchEnabled && query.trim() ?
-    LEADS.filter((lead) =>
-    [lead.name, lead.company, lead.email].join(' ').toLowerCase().includes(query.trim().toLowerCase())
-    ) :
-    LEADS;
-    return plan === 'free' ? filtered.slice(0, FREE_ROW_LIMIT) : filtered;
-  }, [query, searchEnabled, plan]);
+  const rows = useMemo(() => LEADS.slice(0, FREE_ROW_LIMIT), []);
 
   return (
     <div className="mx-auto w-full max-w-[1180px]">
@@ -57,26 +38,25 @@ export function Leads() {
             Add lead
           </Button>
         } />
-      
+
 
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-[320px]">
           <SearchIcon
             className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-chalk-faint"
             aria-hidden="true" />
-          
+
           <label htmlFor="lead-search" className="sr-only">
             Search leads
           </label>
           <input
             id="lead-search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            disabled={!searchEnabled}
-            title={searchEnabled ? undefined : 'Upgrade to Pro to search leads'}
-            placeholder={searchEnabled ? 'Search name, company or email' : 'Search — upgrade to Pro'}
+            disabled
+            title="Upgrade to Pro to search leads"
+            placeholder="Search — upgrade to Pro"
             className="h-11 w-full rounded-lg border border-ink-700 bg-ink-900 pl-10 pr-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none disabled:cursor-not-allowed disabled:opacity-55" />
-          
+
         </div>
         <p className="font-mono text-[11.5px] uppercase tracking-wider text-chalk-faint">
           {rows.length} shown · {user.workspace.leadsUsed.toLocaleString('en-US')} total
@@ -96,20 +76,13 @@ export function Leads() {
                   'px-5 py-3.5 font-mono text-[10.5px] uppercase tracking-[0.16em] text-chalk-faint',
                   head === 'Actions' && 'text-right'
                 )}>
-                
+
                   {head}
                 </th>
               )}
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 &&
-            <tr>
-                <td colSpan={6} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
-                  No leads match &ldquo;{query}&rdquo;.
-                </td>
-              </tr>
-            }
             {rows.map((lead) =>
             <tr key={lead.id} className="border-b border-ink-850 last:border-0 hover:bg-ink-850/60">
                 <td className="px-5 py-4">
@@ -124,7 +97,7 @@ export function Leads() {
                       <span
                       className={cn('block h-full rounded-full', lead.score >= 70 ? 'bg-signal' : 'bg-ink-600')}
                       style={{ width: `${lead.score}%` }} />
-                    
+
                     </span>
                     <span className="font-mono text-[13px] text-chalk">{lead.score}</span>
                   </span>
@@ -135,7 +108,7 @@ export function Leads() {
                     'inline-flex rounded-full border px-2.5 py-1 text-[11.5px] font-medium',
                     STATUS_STYLES[lead.status]
                   )}>
-                  
+
                     {lead.status}
                   </span>
                 </td>
@@ -143,15 +116,11 @@ export function Leads() {
                   <div className="flex items-center justify-end gap-1.5">
                     <IconAction label={`Send email to ${lead.name}`} icon={MailIcon} />
                     <IconAction
-                    label={
-                    whatsappEnabled ?
-                    `Send WhatsApp to ${lead.name}` :
-                    'Upgrade to Pro to access WhatsApp automation'
-                    }
+                    label="Upgrade to Pro to access WhatsApp automation"
                     icon={MessageSquareIcon}
-                    disabled={!whatsappEnabled}
-                    onClick={whatsappEnabled ? undefined : openUpgrade} />
-                  
+                    disabled
+                    onClick={openUpgrade} />
+
                     <IconAction label={`Edit ${lead.name}`} icon={PencilIcon} />
                     <IconAction label={`Delete ${lead.name}`} icon={Trash2Icon} danger />
                   </div>
@@ -162,17 +131,15 @@ export function Leads() {
         </table>
       </div>
 
-      {plan === 'free' &&
       <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-ink-800 bg-ink-900 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-[13.5px] text-chalk-dim">
-            Free workspaces show the {FREE_ROW_LIMIT} most recent leads and cap at 500 per month. Search, bulk
-            actions and WhatsApp unlock on Pro.
-          </p>
-          <Button size="sm" onClick={openUpgrade}>
-            Upgrade to Pro
-          </Button>
-        </div>
-      }
+        <p className="text-[13.5px] text-chalk-dim">
+          Free workspaces show the {FREE_ROW_LIMIT} most recent leads and cap at 500 per month. Search, bulk
+          actions and WhatsApp unlock on Pro.
+        </p>
+        <Button size="sm" onClick={openUpgrade}>
+          Upgrade to Pro
+        </Button>
+      </div>
     </div>);
 
 }
@@ -201,7 +168,7 @@ function IconAction({ label, icon: Icon, disabled = false, danger = false, onCli
         'text-chalk-dim hover:border-ember/50 hover:text-ember' :
         'text-chalk-dim hover:border-signal/50 hover:text-signal'
       )}>
-      
+
       <Icon className="h-3.5 w-3.5" />
     </button>);
 

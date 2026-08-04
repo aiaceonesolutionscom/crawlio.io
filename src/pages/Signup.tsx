@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeftIcon, CheckIcon, Loader2Icon } from 'lucide-react';
-import { Button } from '../components/ui/Button';
-import { Logo } from '../components/ui/Logo';
+import { Button } from '../shared/ui/Button';
+import { Logo } from '../shared/ui/Logo';
 import { useAuth } from '../contexts/AuthContext';
 import { PLANS } from '../data/plans';
-import { cn } from '../utils/cn';
+import { cn } from '../shared/utils/cn';
 import type { PlanId } from '../types';
 
 interface SignupState {
@@ -28,7 +28,7 @@ export function Signup() {
     e.preventDefault();
     try {
       await signup({ name, email, password, plan });
-      navigate('/dashboard');
+      navigate('/app');
     } catch {
 
       /* error surfaced from context */}

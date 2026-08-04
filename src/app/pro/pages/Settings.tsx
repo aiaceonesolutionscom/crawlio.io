@@ -1,13 +1,18 @@
 import React from 'react';
 import { HeadphonesIcon, KeyRoundIcon, PaletteIcon } from 'lucide-react';
-import { PageHeader } from '../../components/dashboard/PageHeader';
-import { UsageMeter } from '../../components/dashboard/UsageMeter';
-import { Button } from '../../components/ui/Button';
-import { useAuth } from '../../contexts/AuthContext';
-import { useDashboardChrome } from '../../hooks/useDashboardChrome';
-import { planById } from '../../data/plans';
-import { can, formatQuota, planLabel } from '../../utils/plan';
-import { cn } from '../../utils/cn';
+import { PageHeader } from '../../../shared/layout/PageHeader';
+import { UsageMeter } from '../../../shared/ui/UsageMeter';
+import { Button } from '../../../shared/ui/Button';
+import { useAuth } from '../../../contexts/AuthContext';
+import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
+import { planById } from '../../../data/plans';
+import { formatQuota, planLabel } from '../../../utils/plan';
+
+const ENTERPRISE_CARDS = [
+{ icon: PaletteIcon, title: 'Custom branding', body: 'Your logo, colours and sending domain across every touchpoint.' },
+{ icon: KeyRoundIcon, title: 'SSO / SAML', body: 'Connect Okta, Entra ID or any SAML 2.0 provider. (Setup pending)' },
+{ icon: HeadphonesIcon, title: 'Account manager', body: 'Ines Cardoso — ines@crawlio.io · SLA response under 2 hours.' }];
+
 
 export function Settings() {
   const { user } = useAuth();
@@ -16,20 +21,13 @@ export function Settings() {
 
   const { workspace } = user;
   const plan = planById(workspace.plan);
-  const isEnterprise = workspace.plan === 'enterprise';
-
-  const enterpriseCards = [
-  { icon: PaletteIcon, title: 'Custom branding', body: 'Your logo, colours and sending domain across every touchpoint.' },
-  { icon: KeyRoundIcon, title: 'SSO / SAML', body: 'Connect Okta, Entra ID or any SAML 2.0 provider. (Setup pending)' },
-  { icon: HeadphonesIcon, title: 'Account manager', body: 'Ines Cardoso — ines@crawlio.io · SLA response under 2 hours.' }];
-
 
   return (
     <div className="mx-auto w-full max-w-[900px]">
       <PageHeader
         title="Workspace settings"
         description="Plan, quotas and workspace identity. Changes apply to every member of this tenant." />
-      
+
 
       <div className="space-y-4">
         <section aria-labelledby="workspace-title" className="rounded-2xl border border-ink-800 bg-ink-900 p-5">
@@ -62,9 +60,7 @@ export function Settings() {
                 {plan.seats.toLowerCase()}.
               </p>
             </div>
-            <Button variant={workspace.plan === 'free' ? 'primary' : 'outline'} onClick={openUpgrade}>
-              {workspace.plan === 'free' ? 'Upgrade plan' : 'Change plan'}
-            </Button>
+            <Button variant="outline" onClick={openUpgrade}>Change plan</Button>
           </div>
 
           <div className="mt-5">
@@ -77,42 +73,32 @@ export function Settings() {
             <h3 id="enterprise-title" className="font-display text-[16px] font-semibold tracking-tight text-chalk">
               Enterprise controls
             </h3>
-            {!isEnterprise &&
             <span className="rounded bg-ink-800 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-chalk-faint">
-                Enterprise
-              </span>
-            }
+              Enterprise
+            </span>
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            {enterpriseCards.map((card) => {
-              const unlocked = can(workspace.plan, 'branding');
-              return (
-                <div
-                  key={card.title}
-                  title={unlocked ? undefined : 'Upgrade to Enterprise to access'}
-                  className={cn(
-                    'rounded-xl border p-4',
-                    unlocked ? 'border-ink-800 bg-ink-950' : 'border-ink-850 bg-ink-950 opacity-55'
-                  )}>
-                  
-                  <card.icon className="h-4 w-4 text-signal" aria-hidden="true" />
-                  <p className="mt-3 text-[14px] font-medium text-chalk">{card.title}</p>
-                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-chalk-dim">{card.body}</p>
-                </div>);
+            {ENTERPRISE_CARDS.map((card) =>
+            <div
+              key={card.title}
+              title="Upgrade to Enterprise to access"
+              className="rounded-xl border border-ink-850 bg-ink-950 p-4 opacity-55">
 
-            })}
+                <card.icon className="h-4 w-4 text-signal" aria-hidden="true" />
+                <p className="mt-3 text-[14px] font-medium text-chalk">{card.title}</p>
+                <p className="mt-1.5 text-[12.5px] leading-relaxed text-chalk-dim">{card.body}</p>
+              </div>
+            )}
           </div>
 
-          {!isEnterprise &&
           <p className="mt-5 border-t border-ink-850 pt-4 text-[13px] text-chalk-faint">
-              White-label, SSO and a dedicated account manager come with Enterprise.{' '}
-              <button type="button" onClick={openUpgrade} className="text-signal hover:underline">
-                Talk to sales
-              </button>
-              .
-            </p>
-          }
+            White-label, SSO and a dedicated account manager come with Enterprise.{' '}
+            <button type="button" onClick={openUpgrade} className="text-signal hover:underline">
+              Talk to sales
+            </button>
+            .
+          </p>
         </section>
 
         <section className="rounded-2xl border border-ink-800 bg-ink-900 p-5">

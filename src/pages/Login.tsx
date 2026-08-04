@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeftIcon, Loader2Icon } from 'lucide-react';
-import { Button } from '../components/ui/Button';
-import { Logo } from '../components/ui/Logo';
+import { Button } from '../shared/ui/Button';
+import { Logo } from '../shared/ui/Logo';
 import { useAuth } from '../contexts/AuthContext';
 
 export function Login() {
@@ -15,7 +15,7 @@ export function Login() {
     e.preventDefault();
     try {
       await login(email, password);
-      navigate('/dashboard');
+      navigate('/app');
     } catch {
 
       /* error surfaced from context */}

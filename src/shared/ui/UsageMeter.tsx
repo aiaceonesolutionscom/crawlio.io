@@ -1,8 +1,8 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Button } from '../ui/Button';
+import { Button } from './Button';
 import { formatQuota } from '../../utils/plan';
-import { cn } from '../../utils/cn';
+import { cn } from '../utils/cn';
 
 interface Props {
   used: number;
@@ -31,7 +31,7 @@ export function UsageMeter({ used, quota, label, onUpgrade }: Props) {
           animate={{ width: `${pct}%` }}
           transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
           className={cn('h-full rounded-full', nearLimit ? 'bg-ember' : 'bg-signal')} />
-        
+
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">

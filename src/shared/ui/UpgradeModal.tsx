@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckIcon, Loader2Icon, XIcon } from 'lucide-react';
-import { Button } from '../ui/Button';
+import { Button } from './Button';
 import { useAuth } from '../../contexts/AuthContext';
 import { PLANS } from '../../data/plans';
-import { cn } from '../../utils/cn';
+import { cn } from '../utils/cn';
 import type { PlanId } from '../../types';
 
 interface Props {
@@ -12,9 +13,10 @@ interface Props {
   onClose: () => void;
 }
 
-/** Simulates POST /upgrade-plan and the billing hand-off. */
+/** Simulates POST /upgrade-plan and the billing hand-off. Always redirects to the new tier's route root once the plan change is confirmed — Free's locked pages don't map 1:1 to Pro/Enterprise's real pages, so preserving the sub-path isn't meaningful. */
 export function UpgradeModal({ open, onClose }: Props) {
   const { user, changePlan } = useAuth();
+  const navigate = useNavigate();
   const currentPlan = user?.workspace.plan ?? 'free';
   const [selected, setSelected] = useState<PlanId>(currentPlan === 'free' ? 'pro' : currentPlan);
   const [status, setStatus] = useState<'idle' | 'saving' | 'done'>('idle');
@@ -39,7 +41,10 @@ export function UpgradeModal({ open, onClose }: Props) {
     window.setTimeout(() => {
       changePlan(selected);
       setStatus('done');
-      window.setTimeout(onClose, 700);
+      window.setTimeout(() => {
+        onClose();
+        navigate(`/app/${selected}`, { replace: true });
+      }, 700);
     }, 800);
   };
 
@@ -55,7 +60,7 @@ export function UpgradeModal({ open, onClose }: Props) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="absolute inset-0 bg-ink-950/85 backdrop-blur-sm" />
-        
+
           <motion.div
           role="dialog"
           aria-modal="true"
@@ -65,7 +70,7 @@ export function UpgradeModal({ open, onClose }: Props) {
           exit={{ opacity: 0, y: 16, scale: 0.98 }}
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
           className="relative w-full max-w-[720px] overflow-hidden rounded-t-2xl border border-ink-700 bg-ink-900 sm:rounded-2xl">
-          
+
             <div className="flex items-start justify-between gap-4 border-b border-ink-850 px-6 py-5">
               <div>
                 <h2 id="upgrade-title" className="font-display text-[19px] font-semibold tracking-tight text-chalk">
@@ -80,7 +85,7 @@ export function UpgradeModal({ open, onClose }: Props) {
               onClick={onClose}
               aria-label="Close dialog"
               className="rounded-lg p-1.5 text-chalk-faint hover:bg-ink-850 hover:text-chalk">
-              
+
                 <XIcon className="h-4 w-4" />
               </button>
             </div>
@@ -99,7 +104,7 @@ export function UpgradeModal({ open, onClose }: Props) {
                       'rounded-xl border p-4 text-left transition-colors',
                       isSelected ? 'border-signal bg-ink-850' : 'border-ink-700 bg-ink-950 hover:border-ink-600'
                     )}>
-                    
+
                       <span className="flex items-center justify-between">
                         <span className="font-display text-[16px] font-semibold text-chalk">{plan.name}</span>
                         {isCurrent &&

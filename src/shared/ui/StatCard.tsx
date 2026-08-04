@@ -1,6 +1,6 @@
 import React from 'react';
 import { TrendingDownIcon, TrendingUpIcon } from 'lucide-react';
-import { cn } from '../../utils/cn';
+import { cn } from '../utils/cn';
 
 interface Props {
   label: string;
@@ -21,7 +21,7 @@ export function StatCard({ label, value, delta, note, muted = false }: Props) {
           'mt-3 font-display text-[30px] font-semibold tracking-tightest',
           muted ? 'text-chalk-faint' : 'text-chalk'
         )}>
-        
+
         {value}
       </p>
       <div className="mt-2 flex items-center gap-2">
@@ -31,7 +31,7 @@ export function StatCard({ label, value, delta, note, muted = false }: Props) {
             'inline-flex items-center gap-1 text-[12.5px] font-medium',
             delta.direction === 'up' ? 'text-signal' : 'text-ember'
           )}>
-          
+
             <Icon className="h-3.5 w-3.5" aria-hidden="true" />
             {delta.value}
           </span>

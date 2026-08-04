@@ -1,39 +1,28 @@
-import React, { useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeftIcon, CheckIcon, Loader2Icon } from 'lucide-react';
-import { Button } from '../shared/ui/Button';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeftIcon } from 'lucide-react';
+import { SignUp } from '@clerk/clerk-react';
 import { Logo } from '../shared/ui/Logo';
-import { useAuth } from '../contexts/AuthContext';
-import { PLANS } from '../data/plans';
-import { cn } from '../shared/utils/cn';
-import type { PlanId } from '../types';
 
-interface SignupState {
-  email?: string;
-  plan?: PlanId;
-}
+const CLERK_APPEARANCE = {
+  variables: {
+    colorPrimary: '#CBFF4D',
+    colorBackground: '#131617',
+    colorText: '#F1F4F0',
+    colorTextSecondary: '#A5ADA7',
+    colorInputBackground: '#191D1F',
+    colorInputText: '#F1F4F0',
+    borderRadius: '10px'
+  },
+  elements: {
+    card: 'shadow-none bg-transparent',
+    headerTitle: 'hidden',
+    headerSubtitle: 'hidden',
+    footer: 'hidden'
+  }
+};
 
 export function Signup() {
-  const { signup, isPending, error } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const state = (location.state ?? {}) as SignupState;
-
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState(state.email ?? '');
-  const [password, setPassword] = useState('');
-  const [plan, setPlan] = useState<PlanId>(state.plan ?? 'free');
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await signup({ name, email, password, plan });
-      navigate('/app');
-    } catch {
-
-      /* error surfaced from context */}
-  };
-
   return (
     <div className="min-h-screen w-full bg-ink-950">
       <div className="mx-auto grid w-full max-w-[1080px] gap-12 px-5 py-14 lg:grid-cols-[1fr_1fr] lg:gap-16 lg:py-20">
@@ -51,126 +40,15 @@ export function Signup() {
             We provision an isolated workspace on your chosen plan — quotas, roles and defaults included.
           </p>
 
-          <form onSubmit={handleSubmit} className="mt-8 space-y-4" noValidate>
-            <div>
-              <label htmlFor="signup-name" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                Full name
-              </label>
-              <input
-                id="signup-name"
-                required
-                autoComplete="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Alex Moreau"
-                className="h-11 w-full rounded-lg border border-ink-700 bg-ink-900 px-3.5 text-[15px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
-              
-            </div>
+          <div className="mt-8">
+            <SignUp
+              routing="path"
+              path="/signup"
+              signInUrl="/login"
+              fallbackRedirectUrl="/app"
+              appearance={CLERK_APPEARANCE} />
 
-            <div>
-              <label htmlFor="signup-email" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                Work email
-              </label>
-              <input
-                id="signup-email"
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="h-11 w-full rounded-lg border border-ink-700 bg-ink-900 px-3.5 text-[15px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
-              
-            </div>
-
-            <div>
-              <label htmlFor="signup-password" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                Password
-              </label>
-              <input
-                id="signup-password"
-                type="password"
-                required
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 6 characters"
-                className="h-11 w-full rounded-lg border border-ink-700 bg-ink-900 px-3.5 text-[15px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
-              
-            </div>
-
-            <fieldset>
-              <legend className="mb-2 text-[13px] font-medium text-chalk-dim">Choose your plan</legend>
-              <div className="space-y-2">
-                {PLANS.map((option) => {
-                  const selected = plan === option.id;
-                  return (
-                    <label
-                      key={option.id}
-                      className={cn(
-                        'flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition-colors',
-                        selected ? 'border-signal bg-ink-850' : 'border-ink-700 bg-ink-900 hover:border-ink-600'
-                      )}>
-                      
-                      <input
-                        type="radio"
-                        name="plan"
-                        value={option.id}
-                        checked={selected}
-                        onChange={() => setPlan(option.id)}
-                        className="sr-only" />
-                      
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
-                          selected ? 'border-signal bg-signal' : 'border-ink-600'
-                        )}>
-                        
-                        {selected && <CheckIcon className="h-3 w-3 text-signal-deep" strokeWidth={3} />}
-                      </span>
-                      <span className="flex-1">
-                        <span className="flex items-center justify-between gap-3">
-                          <span className="text-[14.5px] font-medium text-chalk">{option.name}</span>
-                          <span className="font-mono text-[12px] text-chalk-dim">{option.price}</span>
-                        </span>
-                        <span className="mt-0.5 block text-[12.5px] text-chalk-faint">
-                          {option.leadQuota} · {option.seats}
-                        </span>
-                      </span>
-                    </label>);
-
-                })}
-              </div>
-            </fieldset>
-
-            {error &&
-            <p
-              role="alert"
-              className="rounded-lg border border-ember/40 bg-ember/10 px-3.5 py-2.5 text-[13px] text-ember">
-              
-                {error}
-              </p>
-            }
-
-            <Button type="submit" className="w-full" disabled={isPending}>
-              {isPending ?
-              <>
-                  <Loader2Icon className="h-4 w-4 animate-spin" />
-                  Provisioning workspace…
-                </> :
-
-              'Create workspace'
-              }
-            </Button>
-
-            <p className="text-center text-[14px] text-chalk-dim">
-              Already have an account?{' '}
-              <Link to="/login" className="font-medium text-signal hover:underline">
-                Login
-              </Link>
-            </p>
-          </form>
+          </div>
         </div>
 
         <aside className="hidden rounded-2xl border border-ink-800 bg-ink-900 p-7 lg:block">
@@ -192,7 +70,8 @@ export function Signup() {
             )}
           </ol>
           <p className="mt-8 border-t border-ink-800 pt-6 text-[13px] leading-relaxed text-chalk-faint">
-            You can change plans at any time from Settings — upgrades take effect immediately.
+            Every new workspace starts on Free. Plan selection at signup is coming back once workspace
+            provisioning is wired up — for now you can upgrade from Settings after your first login.
           </p>
         </aside>
       </div>

@@ -2,11 +2,11 @@ import React from 'react';
 import { UserPlusIcon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useSession } from '../../../contexts/SessionContext';
 import { TeamTable } from '../components/TeamTable';
 
 export function Team() {
-  const { user } = useAuth();
+  const { user } = useSession();
   if (!user) return null;
 
   return (

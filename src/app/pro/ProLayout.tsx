@@ -4,12 +4,12 @@ import { ChevronDownIcon, LogOutIcon, MenuIcon } from 'lucide-react';
 import { Logo } from '../../shared/ui/Logo';
 import { Button } from '../../shared/ui/Button';
 import { UpgradeModal } from '../../shared/ui/UpgradeModal';
-import { useAuth } from '../../contexts/AuthContext';
+import { useSession } from '../../contexts/SessionContext';
 import { cn } from '../../shared/utils/cn';
 import { NAV } from './nav';
 
 export function ProLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout } = useSession();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);

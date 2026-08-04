@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckIcon, Loader2Icon, XIcon } from 'lucide-react';
+import { AlertCircleIcon } from 'lucide-react';
 import { Button } from './Button';
-import { useAuth } from '../../contexts/AuthContext';
+import { useSession } from '../../contexts/SessionContext';
 import { PLANS } from '../../data/plans';
 import { cn } from '../utils/cn';
 import type { PlanId } from '../../types';
@@ -13,18 +12,19 @@ interface Props {
   onClose: () => void;
 }
 
-/** Simulates POST /upgrade-plan and the billing hand-off. Always redirects to the new tier's route root once the plan change is confirmed — Free's locked pages don't map 1:1 to Pro/Enterprise's real pages, so preserving the sub-path isn't meaningful. */
+/**
+ * Plan switching isn't wired to a real backend yet — that lands in Phase 4
+ * (PATCH /workspaces/{id}/plan). Until then this modal is honest about being
+ * a preview: it shows the plan comparison but doesn't pretend to switch you.
+ */
 export function UpgradeModal({ open, onClose }: Props) {
-  const { user, changePlan } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useSession();
   const currentPlan = user?.workspace.plan ?? 'free';
   const [selected, setSelected] = useState<PlanId>(currentPlan === 'free' ? 'pro' : currentPlan);
-  const [status, setStatus] = useState<'idle' | 'saving' | 'done'>('idle');
 
   useEffect(() => {
     if (open) {
       setSelected(currentPlan === 'free' ? 'pro' : currentPlan);
-      setStatus('idle');
     }
   }, [open, currentPlan]);
 
@@ -35,18 +35,6 @@ export function UpgradeModal({ open, onClose }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-
-  const confirm = () => {
-    setStatus('saving');
-    window.setTimeout(() => {
-      changePlan(selected);
-      setStatus('done');
-      window.setTimeout(() => {
-        onClose();
-        navigate(`/app/${selected}`, { replace: true });
-      }, 700);
-    }, 800);
-  };
 
   return (
     <AnimatePresence>
@@ -124,25 +112,14 @@ export function UpgradeModal({ open, onClose }: Props) {
             </div>
 
             <div className="flex flex-col gap-3 border-t border-ink-850 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-[12.5px] text-chalk-faint">
-                {selected === 'enterprise' ?
-              'Enterprise is quoted — our team will reach out within one business day.' :
-              'You will be routed to secure checkout for the prorated amount.'}
+              <p className="flex items-start gap-2 text-[12.5px] text-chalk-faint">
+                <AlertCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-signal" aria-hidden="true" />
+                Self-serve plan switching is landing soon — for now, email hello@crawlio.io and we&rsquo;ll move your
+                workspace by hand.
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={onClose}>
-                  Cancel
-                </Button>
-                <Button onClick={confirm} disabled={status !== 'idle' || selected === currentPlan}>
-                  {status === 'saving' && <Loader2Icon className="h-4 w-4 animate-spin" />}
-                  {status === 'done' && <CheckIcon className="h-4 w-4" />}
-                  {status === 'idle' ?
-                selected === 'enterprise' ?
-                'Contact sales' :
-                `Switch to ${selected === 'pro' ? 'Pro' : 'Free'}` :
-                status === 'saving' ?
-                'Updating…' :
-                'Plan updated'}
+                  Close
                 </Button>
               </div>
             </div>

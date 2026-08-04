@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { MailIcon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useSession } from '../../../contexts/SessionContext';
 import { LEADS } from '../../../data/leads';
 import { cn } from '../../../shared/utils/cn';
 import type { LeadStatus } from '../../../types';
@@ -17,7 +17,7 @@ const STATUS_STYLES: Record<LeadStatus, string> = {
 };
 
 export function Leads() {
-  const { user } = useAuth();
+  const { user } = useSession();
   const [query, setQuery] = useState('');
   if (!user) return null;
 

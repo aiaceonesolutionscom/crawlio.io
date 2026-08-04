@@ -15,13 +15,13 @@ import { PageHeader } from '../../../shared/layout/PageHeader';
 import { StatCard } from '../../../shared/ui/StatCard';
 import { UsageMeter } from '../../../shared/ui/UsageMeter';
 import { Button } from '../../../shared/ui/Button';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useSession } from '../../../contexts/SessionContext';
 import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
 import { ACTIVITY, LEADS_OVER_TIME } from '../../../data/metrics';
 import { LockedFeatureCard } from '../components/LockedFeatureCard';
 
 export function Overview() {
-  const { user } = useAuth();
+  const { user } = useSession();
   const { openUpgrade } = useDashboardChrome();
   if (!user) return null;
 

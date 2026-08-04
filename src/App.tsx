@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { AuthProvider } from './contexts/AuthContext';
+import { ClerkProvider } from '@clerk/clerk-react';
+import { SessionProvider } from './contexts/SessionContext';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
@@ -37,15 +38,22 @@ function TierFallback() {
   return <div className="flex min-h-screen w-full items-center justify-center bg-ink-950 text-chalk-faint text-[13px]">Loading…</div>;
 }
 
+const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+
+if (!CLERK_PUBLISHABLE_KEY) {
+  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY — set it in .env (see .env.example).');
+}
+
 export function App() {
   return (
-    <AuthProvider>
+    <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY} signInUrl="/login" signUpUrl="/signup">
+      <SessionProvider>
       <BrowserRouter>
         <Suspense fallback={<TierFallback />}>
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
+            <Route path="/login/*" element={<Login />} />
+            <Route path="/signup/*" element={<Signup />} />
 
             <Route path="/app" element={<RequireAuth><PlanRedirect /></RequireAuth>} />
 
@@ -108,6 +116,7 @@ export function App() {
           </Routes>
         </Suspense>
       </BrowserRouter>
-    </AuthProvider>);
+      </SessionProvider>
+    </ClerkProvider>);
 
 }

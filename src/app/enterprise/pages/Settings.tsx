@@ -1,7 +1,7 @@
 import React from 'react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { UsageMeter } from '../../../shared/ui/UsageMeter';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useSession } from '../../../contexts/SessionContext';
 import { planById } from '../../../data/plans';
 import { formatQuota, planLabel } from '../../../utils/plan';
 import { BrandingPanel } from '../components/BrandingPanel';
@@ -9,7 +9,7 @@ import { SSOSettings } from '../components/SSOSettings';
 import { AccountManagerCard } from '../components/AccountManagerCard';
 
 export function Settings() {
-  const { user } = useAuth();
+  const { user } = useSession();
   if (!user) return null;
 
   const { workspace } = user;

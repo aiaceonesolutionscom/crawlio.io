@@ -3,7 +3,7 @@ import { HeadphonesIcon, KeyRoundIcon, PaletteIcon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { UsageMeter } from '../../../shared/ui/UsageMeter';
 import { Button } from '../../../shared/ui/Button';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useSession } from '../../../contexts/SessionContext';
 import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
 import { planById } from '../../../data/plans';
 import { formatQuota, planLabel } from '../../../utils/plan';
@@ -15,7 +15,7 @@ const ENTERPRISE_CARDS = [
 
 
 export function Settings() {
-  const { user } = useAuth();
+  const { user } = useSession();
   const { openUpgrade } = useDashboardChrome();
   if (!user) return null;
 

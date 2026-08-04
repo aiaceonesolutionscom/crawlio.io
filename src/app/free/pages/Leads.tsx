@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { MailIcon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
-import { useAuth } from '../../../contexts/AuthContext';
+import { useSession } from '../../../contexts/SessionContext';
 import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
 import { LEADS } from '../../../data/leads';
 import { cn } from '../../../shared/utils/cn';
@@ -20,7 +20,7 @@ const STATUS_STYLES: Record<LeadStatus, string> = {
 const FREE_ROW_LIMIT = 6;
 
 export function Leads() {
-  const { user } = useAuth();
+  const { user } = useSession();
   const { openUpgrade } = useDashboardChrome();
   const [query] = useState('');
   if (!user) return null;

@@ -1,0 +1,25 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
+PlanId = Literal["free", "pro", "enterprise"]
+
+
+class WorkspaceCreate(BaseModel):
+    name: str
+
+
+class WorkspaceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    plan: PlanId
+    lead_quota: int
+    seat_quota: int
+    created_at: datetime
+
+
+class WorkspacePlanUpdate(BaseModel):
+    plan: PlanId

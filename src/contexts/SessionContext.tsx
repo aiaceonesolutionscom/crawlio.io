@@ -1,29 +1,71 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth as useClerkAuth, useClerk, useUser } from '@clerk/clerk-react';
-import { PLAN_LIMITS } from '../data/plans';
-import type { User } from '../types';
+import { ApiError } from '../lib/api/client';
+import { createWorkspace, getMyWorkspace, updateWorkspacePlan, type WorkspaceDTO } from '../lib/api/workspaces';
+import type { PlanId, User } from '../types';
 
 interface SessionContextValue {
   user: User | null;
   isLoaded: boolean;
   logout: () => void;
+  changePlan: (plan: PlanId) => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
 /**
- * Wraps Clerk's identity state and shapes it into the same `User` shape the
- * tier pages already consume. workspace.plan is hardcoded 'free' until Phase 4
- * wires GET /workspaces/me — that's the only thing that changes here later.
+ * Wraps Clerk's identity state and a real workspace fetched from the backend,
+ * shaped into the `User` type the tier pages already consume. On first /app
+ * visit for a user with no workspace yet (fresh signup), one is auto-created
+ * as Free — this stands in for a dedicated post-signup provisioning step
+ * since Clerk's prebuilt <SignUp> doesn't give us a mid-flow hook.
  */
 export function SessionProvider({ children }: {children: React.ReactNode;}) {
-  const { isLoaded, isSignedIn } = useClerkAuth();
+  const { isLoaded: clerkLoaded, isSignedIn, getToken } = useClerkAuth();
   const { user: clerkUser } = useUser();
   const { signOut } = useClerk();
+  const [workspace, setWorkspace] = useState<WorkspaceDTO | null>(null);
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+
+  const loadWorkspace = useCallback(async () => {
+    if (!isSignedIn) {
+      setWorkspace(null);
+      setWorkspaceLoaded(true);
+      return;
+    }
+    const token = await getToken();
+    try {
+      const ws = await getMyWorkspace(token);
+      setWorkspace(ws);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        const name = `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`;
+        const ws = await createWorkspace(token, name);
+        setWorkspace(ws);
+      } else {
+        throw e;
+      }
+    } finally {
+      setWorkspaceLoaded(true);
+    }
+  }, [isSignedIn, getToken, clerkUser]);
+
+  useEffect(() => {
+    if (clerkLoaded) void loadWorkspace();
+  }, [clerkLoaded, isSignedIn, loadWorkspace]);
+
+  const changePlan = useCallback(
+    async (plan: PlanId) => {
+      if (!workspace) return;
+      const token = await getToken();
+      const updated = await updateWorkspacePlan(token, workspace.id, plan);
+      setWorkspace(updated);
+    },
+    [workspace, getToken]
+  );
 
   const user = useMemo<User | null>(() => {
-    if (!isSignedIn || !clerkUser) return null;
-    const limits = PLAN_LIMITS.free;
+    if (!isSignedIn || !clerkUser || !workspace) return null;
     const displayName =
     clerkUser.fullName ??
     clerkUser.username ??
@@ -36,20 +78,22 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
       email: clerkUser.primaryEmailAddress?.emailAddress ?? '',
       role: 'Owner',
       workspace: {
-        name: `${clerkUser.firstName ?? clerkUser.username ?? 'My'} Workspace`,
-        plan: 'free',
+        name: workspace.name,
+        plan: workspace.plan,
         leadsUsed: 0,
-        leadQuota: limits.leads,
+        leadQuota: workspace.lead_quota,
         seatsUsed: 1,
-        seatQuota: limits.seats,
-        createdAt: clerkUser.createdAt?.toISOString() ?? new Date().toISOString()
+        seatQuota: workspace.seat_quota,
+        createdAt: workspace.created_at
       }
     };
-  }, [isSignedIn, clerkUser]);
+  }, [isSignedIn, clerkUser, workspace]);
+
+  const isLoaded = clerkLoaded && (!isSignedIn || workspaceLoaded);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ user, isLoaded, logout: () => void signOut() }),
-    [user, isLoaded, signOut]
+    () => ({ user, isLoaded, logout: () => void signOut(), changePlan }),
+    [user, isLoaded, signOut, changePlan]
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

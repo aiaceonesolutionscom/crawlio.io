@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertCircleIcon } from 'lucide-react';
+import { CheckIcon, Loader2Icon, XIcon } from 'lucide-react';
 import { Button } from './Button';
 import { useSession } from '../../contexts/SessionContext';
 import { PLANS } from '../../data/plans';
@@ -12,19 +13,18 @@ interface Props {
   onClose: () => void;
 }
 
-/**
- * Plan switching isn't wired to a real backend yet — that lands in Phase 4
- * (PATCH /workspaces/{id}/plan). Until then this modal is honest about being
- * a preview: it shows the plan comparison but doesn't pretend to switch you.
- */
+/** Calls the real PATCH /workspaces/{id}/plan endpoint. Redirect to the new tier's route root only fires after changePlan's setWorkspace has resolved, so RequirePlan on the new route sees the updated plan immediately instead of bouncing back. */
 export function UpgradeModal({ open, onClose }: Props) {
-  const { user } = useSession();
+  const { user, changePlan } = useSession();
+  const navigate = useNavigate();
   const currentPlan = user?.workspace.plan ?? 'free';
   const [selected, setSelected] = useState<PlanId>(currentPlan === 'free' ? 'pro' : currentPlan);
+  const [status, setStatus] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
 
   useEffect(() => {
     if (open) {
       setSelected(currentPlan === 'free' ? 'pro' : currentPlan);
+      setStatus('idle');
     }
   }, [open, currentPlan]);
 
@@ -35,6 +35,20 @@ export function UpgradeModal({ open, onClose }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  const confirm = async () => {
+    setStatus('saving');
+    try {
+      await changePlan(selected);
+      setStatus('done');
+      window.setTimeout(() => {
+        onClose();
+        navigate(`/app/${selected}`, { replace: true });
+      }, 500);
+    } catch {
+      setStatus('error');
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -112,14 +126,25 @@ export function UpgradeModal({ open, onClose }: Props) {
             </div>
 
             <div className="flex flex-col gap-3 border-t border-ink-850 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-              <p className="flex items-start gap-2 text-[12.5px] text-chalk-faint">
-                <AlertCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-signal" aria-hidden="true" />
-                Self-serve plan switching is landing soon — for now, email hello@crawlio.io and we&rsquo;ll move your
-                workspace by hand.
+              <p className="text-[12.5px] text-chalk-faint">
+                {status === 'error' ?
+              'Something went wrong updating your plan — try again.' :
+              selected === 'enterprise' ?
+              'Enterprise is quoted — our team will reach out within one business day.' :
+              'Quotas update immediately on this workspace.'}
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={onClose}>
-                  Close
+                  Cancel
+                </Button>
+                <Button onClick={confirm} disabled={status === 'saving' || status === 'done' || selected === currentPlan}>
+                  {status === 'saving' && <Loader2Icon className="h-4 w-4 animate-spin" />}
+                  {status === 'done' && <CheckIcon className="h-4 w-4" />}
+                  {status === 'idle' || status === 'error' ?
+                `Switch to ${selected === 'pro' ? 'Pro' : selected === 'enterprise' ? 'Enterprise' : 'Free'}` :
+                status === 'saving' ?
+                'Updating…' :
+                'Plan updated'}
                 </Button>
               </div>
             </div>

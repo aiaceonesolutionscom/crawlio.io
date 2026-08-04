@@ -8,8 +8,7 @@ from alembic import context
 
 from app.core.config import settings
 from app.db.base import Base
-# Model modules are imported here as they're added in later phases so
-# Base.metadata picks them up for autogenerate.
+import app.db.models  # noqa: F401  (populates Base.metadata for autogenerate)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

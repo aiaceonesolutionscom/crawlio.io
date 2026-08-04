@@ -51,3 +51,29 @@ async def authed_client(db_engine):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def client_factory(db_engine):
+    """Yields a function that produces a client acting as an arbitrary user_id, all
+    sharing the same in-memory DB — for tests that need multiple distinct workspaces
+    (e.g. cross-tenant isolation). Callers must fully finish one client's requests
+    before switching users, since the override is a single global mapping."""
+    session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async def override_get_session():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    def _client_for(user_id: str) -> AsyncClient:
+        async def override_get_current_user_id():
+            return user_id
+
+        app.dependency_overrides[get_current_user_id] = override_get_current_user_id
+        transport = ASGITransport(app=app)
+        return AsyncClient(transport=transport, base_url="http://test")
+
+    yield _client_for
+    app.dependency_overrides.clear()

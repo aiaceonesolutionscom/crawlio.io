@@ -1,11 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@clerk/clerk-react';
 import { MailIcon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
 import { useSession } from '../../../contexts/SessionContext';
 import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
-import { LEADS } from '../../../data/leads';
+import { listLeads, type LeadDTO } from '../../../lib/api/leads';
 import { cn } from '../../../shared/utils/cn';
+import { AddLeadModal } from '../components/AddLeadModal';
 import type { LeadStatus } from '../../../types';
 
 const STATUS_STYLES: Record<LeadStatus, string> = {
@@ -21,11 +23,27 @@ const FREE_ROW_LIMIT = 6;
 
 export function Leads() {
   const { user } = useSession();
+  const { getToken } = useAuth();
   const { openUpgrade } = useDashboardChrome();
-  const [query] = useState('');
+  const [leads, setLeads] = useState<LeadDTO[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setIsLoading(true);
+    const token = await getToken();
+    const res = await listLeads(token);
+    setLeads(res.items);
+    setIsLoading(false);
+  }, [getToken]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
   if (!user) return null;
 
-  const rows = useMemo(() => LEADS.slice(0, FREE_ROW_LIMIT), []);
+  const rows = leads.slice(0, FREE_ROW_LIMIT);
 
   return (
     <div className="mx-auto w-full max-w-[1180px]">
@@ -33,7 +51,7 @@ export function Leads() {
         title="Lead Center"
         description="Every captured lead, scored and ready to work. Actions run through your connected channels."
         action={
-        <Button>
+        <Button onClick={() => setAddOpen(true)}>
             <PlusIcon className="h-4 w-4" />
             Add lead
           </Button>
@@ -51,7 +69,6 @@ export function Leads() {
           </label>
           <input
             id="lead-search"
-            value={query}
             disabled
             title="Upgrade to Pro to search leads"
             placeholder="Search — upgrade to Pro"
@@ -59,7 +76,7 @@ export function Leads() {
 
         </div>
         <p className="font-mono text-[11.5px] uppercase tracking-wider text-chalk-faint">
-          {rows.length} shown · {user.workspace.leadsUsed.toLocaleString('en-US')} total
+          {rows.length} shown · {leads.length.toLocaleString('en-US')} total
         </p>
       </div>
 
@@ -83,24 +100,42 @@ export function Leads() {
             </tr>
           </thead>
           <tbody>
+            {isLoading &&
+            <tr>
+                <td colSpan={6} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                  Loading…
+                </td>
+              </tr>
+            }
+            {!isLoading && rows.length === 0 &&
+            <tr>
+                <td colSpan={6} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                  No leads yet — add your first one.
+                </td>
+              </tr>
+            }
             {rows.map((lead) =>
             <tr key={lead.id} className="border-b border-ink-850 last:border-0 hover:bg-ink-850/60">
                 <td className="px-5 py-4">
                   <span className="block text-[14px] font-medium text-chalk">{lead.name}</span>
-                  <span className="block text-[12.5px] text-chalk-faint">{lead.company}</span>
+                  <span className="block text-[12.5px] text-chalk-faint">{lead.company ?? '—'}</span>
                 </td>
-                <td className="px-5 py-4 text-[13.5px] text-chalk-dim">{lead.email}</td>
-                <td className="px-5 py-4 font-mono text-[13px] text-chalk-dim">{lead.phone}</td>
+                <td className="px-5 py-4 text-[13.5px] text-chalk-dim">{lead.email ?? '—'}</td>
+                <td className="px-5 py-4 font-mono text-[13px] text-chalk-dim">{lead.phone ?? '—'}</td>
                 <td className="px-5 py-4">
-                  <span className="flex items-center gap-2">
-                    <span className="h-1.5 w-12 overflow-hidden rounded-full bg-ink-800" aria-hidden="true">
-                      <span
+                  {lead.score !== null ?
+                <span className="flex items-center gap-2">
+                      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-ink-800" aria-hidden="true">
+                        <span
                       className={cn('block h-full rounded-full', lead.score >= 70 ? 'bg-signal' : 'bg-ink-600')}
                       style={{ width: `${lead.score}%` }} />
 
-                    </span>
-                    <span className="font-mono text-[13px] text-chalk">{lead.score}</span>
-                  </span>
+                      </span>
+                      <span className="font-mono text-[13px] text-chalk">{lead.score}</span>
+                    </span> :
+
+                <span className="font-mono text-[12px] text-chalk-faint">Scoring…</span>
+                }
                 </td>
                 <td className="px-5 py-4">
                   <span
@@ -133,13 +168,15 @@ export function Leads() {
 
       <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-ink-800 bg-ink-900 p-5 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-[13.5px] text-chalk-dim">
-          Free workspaces show the {FREE_ROW_LIMIT} most recent leads and cap at 500 per month. Search, bulk
-          actions and WhatsApp unlock on Pro.
+          Free workspaces show the {FREE_ROW_LIMIT} most recent leads and cap at {user.workspace.leadQuota} per
+          month. Search, bulk actions and WhatsApp unlock on Pro.
         </p>
         <Button size="sm" onClick={openUpgrade}>
           Upgrade to Pro
         </Button>
       </div>
+
+      <AddLeadModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={refresh} />
     </div>);
 
 }

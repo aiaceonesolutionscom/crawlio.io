@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@clerk/clerk-react';
 import { MailIcon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
 import { useSession } from '../../../contexts/SessionContext';
-import { LEADS } from '../../../data/leads';
+import { listLeads, type LeadDTO } from '../../../lib/api/leads';
 import { cn } from '../../../shared/utils/cn';
+import { AddLeadModal } from '../components/AddLeadModal';
 import type { LeadStatus } from '../../../types';
 
 const STATUS_STYLES: Record<LeadStatus, string> = {
@@ -18,15 +20,36 @@ const STATUS_STYLES: Record<LeadStatus, string> = {
 
 export function Leads() {
   const { user } = useSession();
+  const { getToken } = useAuth();
+  const [leads, setLeads] = useState<LeadDTO[]>([]);
+  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState('');
-  if (!user) return null;
+  const [isLoading, setIsLoading] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
 
-  const rows = useMemo(() => {
-    if (!query.trim()) return LEADS;
-    return LEADS.filter((lead) =>
-    [lead.name, lead.company, lead.email].join(' ').toLowerCase().includes(query.trim().toLowerCase())
-    );
+  const refresh = useCallback(
+    async (search?: string) => {
+      setIsLoading(true);
+      const token = await getToken();
+      const res = await listLeads(token, search);
+      setLeads(res.items);
+      setTotal(res.total);
+      setIsLoading(false);
+    },
+    [getToken]
+  );
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => void refresh(query || undefined), 300);
+    return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
+
+  if (!user) return null;
 
   return (
     <div className="mx-auto w-full max-w-[1180px]">
@@ -34,7 +57,7 @@ export function Leads() {
         title="Lead Center"
         description="Every captured lead, scored and ready to work. Actions run through your connected channels."
         action={
-        <Button>
+        <Button onClick={() => setAddOpen(true)}>
             <PlusIcon className="h-4 w-4" />
             Add lead
           </Button>
@@ -59,7 +82,7 @@ export function Leads() {
 
         </div>
         <p className="font-mono text-[11.5px] uppercase tracking-wider text-chalk-faint">
-          {rows.length} shown · {user.workspace.leadsUsed.toLocaleString('en-US')} total
+          {leads.length} shown · {total.toLocaleString('en-US')} total
         </p>
       </div>
 
@@ -83,31 +106,42 @@ export function Leads() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 &&
+            {isLoading &&
             <tr>
                 <td colSpan={6} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
-                  No leads match &ldquo;{query}&rdquo;.
+                  Loading…
                 </td>
               </tr>
             }
-            {rows.map((lead) =>
+            {!isLoading && leads.length === 0 &&
+            <tr>
+                <td colSpan={6} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                  {query ? <>No leads match &ldquo;{query}&rdquo;.</> : 'No leads yet — add your first one.'}
+                </td>
+              </tr>
+            }
+            {leads.map((lead) =>
             <tr key={lead.id} className="border-b border-ink-850 last:border-0 hover:bg-ink-850/60">
                 <td className="px-5 py-4">
                   <span className="block text-[14px] font-medium text-chalk">{lead.name}</span>
-                  <span className="block text-[12.5px] text-chalk-faint">{lead.company}</span>
+                  <span className="block text-[12.5px] text-chalk-faint">{lead.company ?? '—'}</span>
                 </td>
-                <td className="px-5 py-4 text-[13.5px] text-chalk-dim">{lead.email}</td>
-                <td className="px-5 py-4 font-mono text-[13px] text-chalk-dim">{lead.phone}</td>
+                <td className="px-5 py-4 text-[13.5px] text-chalk-dim">{lead.email ?? '—'}</td>
+                <td className="px-5 py-4 font-mono text-[13px] text-chalk-dim">{lead.phone ?? '—'}</td>
                 <td className="px-5 py-4">
-                  <span className="flex items-center gap-2">
-                    <span className="h-1.5 w-12 overflow-hidden rounded-full bg-ink-800" aria-hidden="true">
-                      <span
+                  {lead.score !== null ?
+                <span className="flex items-center gap-2">
+                      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-ink-800" aria-hidden="true">
+                        <span
                       className={cn('block h-full rounded-full', lead.score >= 70 ? 'bg-signal' : 'bg-ink-600')}
                       style={{ width: `${lead.score}%` }} />
 
-                    </span>
-                    <span className="font-mono text-[13px] text-chalk">{lead.score}</span>
-                  </span>
+                      </span>
+                      <span className="font-mono text-[13px] text-chalk">{lead.score}</span>
+                    </span> :
+
+                <span className="font-mono text-[12px] text-chalk-faint">Scoring…</span>
+                }
                 </td>
                 <td className="px-5 py-4">
                   <span
@@ -132,6 +166,8 @@ export function Leads() {
           </tbody>
         </table>
       </div>
+
+      <AddLeadModal open={addOpen} onClose={() => setAddOpen(false)} onCreated={() => refresh(query || undefined)} />
     </div>);
 
 }

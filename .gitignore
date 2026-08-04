@@ -24,6 +24,9 @@ backend/venv/
 backend/.pytest_cache/
 backend/.mypy_cache/
 
+# Local tooling state
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -38,6 +38,16 @@ def welcome_email_html(name: str, workspace_name: str) -> str:
     )
 
 
+def invite_email_html(workspace_name: str, role: str) -> str:
+    return (
+        f"<div style=\"font-family:sans-serif\">"
+        f"<h2>You're invited to {workspace_name} on Crawlio.</h2>"
+        f"<p>You've been invited as a <strong>{role}</strong>.</p>"
+        f"<p>Sign up at Crawlio with this email address to join the workspace.</p>"
+        f"</div>"
+    )
+
+
 def sequence_step_html(body: str) -> str:
     paragraphs = "".join(f"<p>{line}</p>" for line in body.splitlines() if line.strip())
     return f"<div style=\"font-family:sans-serif\">{paragraphs}</div>"

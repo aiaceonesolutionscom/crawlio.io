@@ -7,6 +7,8 @@ export interface WorkspaceDTO {
   plan: PlanId;
   lead_quota: number;
   seat_quota: number;
+  leads_used: number;
+  seats_used: number;
   created_at: string;
 }
 

@@ -20,6 +20,8 @@ class WorkspaceRead(BaseModel):
     plan: PlanId
     lead_quota: int
     seat_quota: int
+    leads_used: int
+    seats_used: int
     created_at: datetime
 
 

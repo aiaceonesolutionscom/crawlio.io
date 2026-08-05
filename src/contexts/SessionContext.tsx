@@ -9,6 +9,7 @@ interface SessionContextValue {
   isLoaded: boolean;
   logout: () => void;
   changePlan: (plan: PlanId) => Promise<void>;
+  refreshWorkspace: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -85,9 +86,9 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
       workspace: {
         name: workspace.name,
         plan: workspace.plan,
-        leadsUsed: 0,
+        leadsUsed: workspace.leads_used,
         leadQuota: workspace.lead_quota,
-        seatsUsed: 1,
+        seatsUsed: workspace.seats_used,
         seatQuota: workspace.seat_quota,
         createdAt: workspace.created_at
       }
@@ -97,8 +98,8 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
   const isLoaded = clerkLoaded && (!isSignedIn || workspaceLoaded);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ user, isLoaded, logout: () => void signOut(), changePlan }),
-    [user, isLoaded, signOut, changePlan]
+    () => ({ user, isLoaded, logout: () => void signOut(), changePlan, refreshWorkspace: loadWorkspace }),
+    [user, isLoaded, signOut, changePlan, loadWorkspace]
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

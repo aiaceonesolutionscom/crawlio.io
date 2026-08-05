@@ -5,6 +5,8 @@ async def test_create_workspace_defaults_to_free(authed_client):
     assert body["plan"] == "free"
     assert body["lead_quota"] == 500
     assert body["seat_quota"] == 1
+    assert body["leads_used"] == 0
+    assert body["seats_used"] == 1
 
 
 async def test_create_workspace_ignores_client_supplied_plan(authed_client):
@@ -76,3 +78,17 @@ async def test_create_workspace_without_owner_email_skips_welcome_email(authed_c
 
     assert resp.status_code == 201
     assert enqueued == []
+
+
+async def test_leads_used_reflects_real_lead_count(client_factory, monkeypatch):
+    from app.workers.tasks_scoring import score_lead_task
+
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_usage") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        await client.post("/api/v1/leads", json={"name": "Lead 1"})
+        await client.post("/api/v1/leads", json={"name": "Lead 2"})
+        resp = await client.get("/api/v1/workspaces/me")
+
+    assert resp.json()["leads_used"] == 2

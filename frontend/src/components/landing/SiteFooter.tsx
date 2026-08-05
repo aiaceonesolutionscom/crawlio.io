@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowRightIcon } from 'lucide-react';
-import { ButtonLink } from '../ui/Button';
-import { Logo } from '../ui/Logo';
+import { ButtonLink } from '../../shared/ui/Button';
+import { Logo } from '../../shared/ui/Logo';
 
 const COLUMNS = [
 { title: 'Product', links: ['AI Qualification', 'Email Outreach', 'WhatsApp Automation', 'Automation Builder'] },

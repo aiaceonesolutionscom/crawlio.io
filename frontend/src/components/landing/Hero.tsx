@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowRightIcon, PlayIcon, SparklesIcon } from 'lucide-react';
-import { Button, ButtonLink } from '../ui/Button';
+import { Button, ButtonLink } from '../../shared/ui/Button';
 import { HeroBackdrop } from './HeroBackdrop';
 
 const fade = {

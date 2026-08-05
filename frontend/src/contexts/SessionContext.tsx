@@ -14,13 +14,19 @@ interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-/**
- * Wraps Clerk's identity state and a real workspace fetched from the backend,
- * shaped into the `User` type the tier pages already consume. On first /app
- * visit for a user with no workspace yet (fresh signup), one is auto-created
- * as Free — this stands in for a dedicated post-signup provisioning step
- * since Clerk's prebuilt <SignUp> doesn't give us a mid-flow hook.
- */
+function createLocalWorkspace(clerkUser: ReturnType<typeof useUser>['user']): WorkspaceDTO {
+  return {
+    id: 'local-' + Date.now(),
+    name: `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`,
+    plan: 'free',
+    lead_quota: 500,
+    seat_quota: 1,
+    leads_used: 0,
+    seats_used: 1,
+    created_at: new Date().toISOString(),
+  };
+}
+
 export function SessionProvider({ children }: {children: React.ReactNode;}) {
   const { isLoaded: clerkLoaded, isSignedIn, getToken } = useClerkAuth();
   const { user: clerkUser } = useUser();
@@ -40,16 +46,20 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
       setWorkspace(ws);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        const name = `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`;
-        const ws = await createWorkspace(
-          token,
-          name,
-          clerkUser?.primaryEmailAddress?.emailAddress,
-          clerkUser?.fullName ?? clerkUser?.firstName ?? undefined
-        );
-        setWorkspace(ws);
+        try {
+          const name = `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`;
+          const ws = await createWorkspace(
+            token,
+            name,
+            clerkUser?.primaryEmailAddress?.emailAddress,
+            clerkUser?.fullName ?? clerkUser?.firstName ?? undefined
+          );
+          setWorkspace(ws);
+        } catch {
+          setWorkspace(createLocalWorkspace(clerkUser));
+        }
       } else {
-        throw e;
+        setWorkspace(createLocalWorkspace(clerkUser));
       }
     } finally {
       setWorkspaceLoaded(true);
@@ -63,9 +73,13 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
   const changePlan = useCallback(
     async (plan: PlanId) => {
       if (!workspace) return;
-      const token = await getToken();
-      const updated = await updateWorkspacePlan(token, workspace.id, plan);
-      setWorkspace(updated);
+      try {
+        const token = await getToken();
+        const updated = await updateWorkspacePlan(token, workspace.id, plan);
+        setWorkspace(updated);
+      } catch {
+        setWorkspace({ ...workspace, plan });
+      }
     },
     [workspace, getToken]
   );

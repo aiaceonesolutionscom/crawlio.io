@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MenuIcon, XIcon } from 'lucide-react';
-import { ButtonLink } from '../ui/Button';
-import { Logo } from '../ui/Logo';
+import { ButtonLink } from '../../shared/ui/Button';
+import { Logo } from '../../shared/ui/Logo';
 
 const NAV = [
 { label: 'Product', href: '#product' },

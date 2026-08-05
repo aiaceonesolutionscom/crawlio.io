@@ -49,5 +49,16 @@ services:
     volumes:
       - ./backend/app:/app/app
 
+  web:
+    build:
+      context: .
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY}
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
 volumes:
   postgres_data:

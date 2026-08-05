@@ -2,5 +2,10 @@ from celery import Celery
 
 from app.core.config import settings
 
-celery_app = Celery("crawlio", broker=settings.redis_url, backend=settings.redis_url)
+celery_app = Celery(
+    "crawlio",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
+    include=["app.workers.tasks_scoring", "app.workers.tasks_email"]
+)
 celery_app.conf.task_default_queue = "crawlio"

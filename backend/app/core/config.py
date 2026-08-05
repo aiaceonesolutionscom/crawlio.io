@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     brevo_sender_email: str = "onboarding@crawlio.io"
     brevo_sender_name: str = "Crawlio"
     mistral_api_key: str = ""
+    tavily_api_key: str = ""
     redis_url: str = "redis://localhost:6379/0"
 
 

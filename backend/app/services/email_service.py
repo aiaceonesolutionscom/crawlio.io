@@ -51,3 +51,14 @@ def invite_email_html(workspace_name: str, role: str) -> str:
 def sequence_step_html(body: str) -> str:
     paragraphs = "".join(f"<p>{line}</p>" for line in body.splitlines() if line.strip())
     return f"<div style=\"font-family:sans-serif\">{paragraphs}</div>"
+
+
+def lead_outreach_html(name: str, workspace_name: str) -> str:
+    return (
+        f"<div style=\"font-family:sans-serif\">"
+        f"<p>Hi {name},</p>"
+        f"<p>Thanks for your interest — I'm reaching out from <strong>{workspace_name}</strong>.</p>"
+        f"<p>Would you have a few minutes this week to connect?</p>"
+        f"<p>Best regards,<br/>{workspace_name}</p>"
+        f"</div>"
+    )

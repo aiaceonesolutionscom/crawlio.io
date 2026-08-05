@@ -8,9 +8,12 @@ export interface LeadDTO {
   company: string | null;
   email: string | null;
   phone: string | null;
+  website: string | null;
+  address: string | null;
   score: number | null;
   status: LeadStatus;
   source: string | null;
+  scoring_failed: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -18,11 +21,31 @@ export interface LeadDTO {
 export interface LeadListResponseDTO {
   items: LeadDTO[];
   total: number;
+  page: number;
+  limit: number;
 }
 
-export function listLeads(token: string | null, search?: string) {
-  const query = search ? `?search=${encodeURIComponent(search)}` : '';
-  return apiFetch<LeadListResponseDTO>(`/api/v1/leads${query}`, token);
+export interface ListLeadsParams {
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+function buildQuery(params?: ListLeadsParams) {
+  const query = new URLSearchParams();
+  if (params?.search) query.set('search', params.search);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return qs ? `?${qs}` : '';
+}
+
+export function listLeads(token: string | null, params?: ListLeadsParams) {
+  return apiFetch<LeadListResponseDTO>(`/api/v1/leads${buildQuery(params)}`, token);
+}
+
+export function getLead(token: string | null, id: string) {
+  return apiFetch<LeadDTO>(`/api/v1/leads/${id}`, token);
 }
 
 export interface CreateLeadInput {
@@ -30,6 +53,19 @@ export interface CreateLeadInput {
   company?: string;
   email?: string;
   phone?: string;
+  website?: string;
+  address?: string;
+  source?: string;
+}
+
+export interface UpdateLeadInput {
+  name?: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  website?: string;
+  address?: string;
+  status?: LeadStatus;
   source?: string;
 }
 
@@ -38,4 +74,36 @@ export function createLead(token: string | null, input: CreateLeadInput) {
     method: 'POST',
     body: JSON.stringify(input)
   });
+}
+
+export function updateLead(token: string | null, id: string, input: UpdateLeadInput) {
+  return apiFetch<LeadDTO>(`/api/v1/leads/${id}`, token, {
+    method: 'PATCH',
+    body: JSON.stringify(input)
+  });
+}
+
+export function deleteLead(token: string | null, id: string) {
+  return apiFetch<void>(`/api/v1/leads/${id}`, token, { method: 'DELETE' });
+}
+
+export function sendLeadEmail(token: string | null, id: string) {
+  return apiFetch<{ sent: boolean }>(`/api/v1/leads/${id}/email`, token, { method: 'POST' });
+}
+
+export function sendLeadWhatsApp(token: string | null, id: string) {
+  return apiFetch<{ url: string }>(`/api/v1/leads/${id}/whatsapp`, token, { method: 'POST' });
+}
+
+export async function exportLeads(token: string | null, search?: string) {
+  const query = search ? `?search=${encodeURIComponent(search)}` : '';
+  const API_URL = import.meta.env.VITE_API_URL;
+  const res = await fetch(`${API_URL}/api/v1/leads/export${query}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || res.statusText);
+  }
+  return res.blob();
 }

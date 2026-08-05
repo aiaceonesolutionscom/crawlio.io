@@ -25,6 +25,8 @@ class Lead(Base):
     company: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="New")
     source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

@@ -15,6 +15,7 @@ async def test_create_lead_enqueues_scoring(client_factory, monkeypatch):
     assert body["name"] == "Amara Okafor"
     assert body["status"] == "New"
     assert body["score"] is None
+    assert body["scoring_failed"] is False
     assert enqueued == [body["id"]]
 
 
@@ -66,3 +67,73 @@ async def test_lead_quota_enforced_at_403(client_factory, monkeypatch):
     assert r1.status_code == 201
     assert r2.status_code == 201
     assert r3.status_code == 403
+
+
+async def test_get_update_delete_lead(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_crud") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        created = await client.post("/api/v1/leads", json={"name": "Alice", "email": "alice@example.com"})
+        lead_id = created.json()["id"]
+
+        got = await client.get(f"/api/v1/leads/{lead_id}")
+        assert got.status_code == 200
+        assert got.json()["name"] == "Alice"
+
+        updated = await client.patch(f"/api/v1/leads/{lead_id}", json={"name": "Alice Updated", "status": "Qualified"})
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "Alice Updated"
+        assert updated.json()["status"] == "Qualified"
+
+        deleted = await client.delete(f"/api/v1/leads/{lead_id}")
+        assert deleted.status_code == 204
+
+        missing = await client.get(f"/api/v1/leads/{lead_id}")
+        assert missing.status_code == 404
+
+
+async def test_duplicate_email_rejected(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_dup") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        r1 = await client.post("/api/v1/leads", json={"name": "Alice", "email": "same@example.com"})
+        r2 = await client.post("/api/v1/leads", json={"name": "Bob", "email": "same@example.com"})
+
+    assert r1.status_code == 201
+    assert r2.status_code == 409
+
+
+async def test_list_leads_pagination(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_page") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        for i in range(5):
+            await client.post("/api/v1/leads", json={"name": f"Lead {i}"})
+
+        page1 = await client.get("/api/v1/leads", params={"page": 1, "limit": 2})
+        page2 = await client.get("/api/v1/leads", params={"page": 2, "limit": 2})
+
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert len(body1["items"]) == 2
+    assert body1["total"] == 5
+    assert body1["page"] == 1
+
+    body2 = page2.json()
+    assert len(body2["items"]) == 2
+    assert body2["page"] == 2
+
+
+async def test_whatsapp_requires_pro_plan(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_wa") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        created = await client.post("/api/v1/leads", json={"name": "Alice", "phone": "+14155550132"})
+        lead_id = created.json()["id"]
+        resp = await client.post(f"/api/v1/leads/{lead_id}/whatsapp")
+
+    assert resp.status_code == 403

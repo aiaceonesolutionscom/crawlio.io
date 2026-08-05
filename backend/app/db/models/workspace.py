@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -9,6 +10,10 @@ from app.db.base import Base
 
 def _new_id() -> str:
     return str(uuid.uuid4())
+
+
+def _new_webhook_token() -> str:
+    return secrets.token_urlsafe(24)
 
 
 def _utcnow() -> datetime:
@@ -23,6 +28,7 @@ class Workspace(Base):
     plan: Mapped[str] = mapped_column(String(20), nullable=False, default="free")
     lead_quota: Mapped[int] = mapped_column(Integer, nullable=False, default=500)
     seat_quota: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    webhook_token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, default=_new_webhook_token)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     members: Mapped[list["WorkspaceMember"]] = relationship(

@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
     clerk_secret_key: str = ""
-    resend_api_key: str = ""
+    brevo_api_key: str = ""
+    brevo_sender_email: str = "onboarding@crawlio.io"
+    brevo_sender_name: str = "Crawlio"
     mistral_api_key: str = ""
     redis_url: str = "redis://localhost:6379/0"
 

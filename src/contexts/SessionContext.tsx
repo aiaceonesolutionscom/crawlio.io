@@ -40,7 +40,12 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
         const name = `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`;
-        const ws = await createWorkspace(token, name);
+        const ws = await createWorkspace(
+          token,
+          name,
+          clerkUser?.primaryEmailAddress?.emailAddress,
+          clerkUser?.fullName ?? clerkUser?.firstName ?? undefined
+        );
         setWorkspace(ws);
       } else {
         throw e;

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.plans import PLAN_LIMITS
 from app.db.models.workspace import Workspace, WorkspaceMember
 from app.schemas.workspace import WorkspaceCreate
+from app.workers.tasks_email import send_welcome_email_task
 
 
 async def get_workspace_for_user(session: AsyncSession, user_id: str) -> Optional[Workspace]:
@@ -36,6 +37,10 @@ async def create_workspace(session: AsyncSession, user_id: str, data: WorkspaceC
     session.add(member)
     await session.commit()
     await session.refresh(workspace)
+
+    if data.owner_email:
+        send_welcome_email_task.delay(data.owner_email, data.owner_name or "there", workspace.name)
+
     return workspace
 
 

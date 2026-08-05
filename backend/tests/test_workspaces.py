@@ -50,3 +50,29 @@ async def test_update_plan_rejects_mismatched_workspace_id(authed_client):
     await authed_client.post("/api/v1/workspaces", json={"name": "Acme"})
     resp = await authed_client.patch("/api/v1/workspaces/not-my-workspace-id/plan", json={"plan": "pro"})
     assert resp.status_code == 403
+
+
+async def test_create_workspace_with_owner_email_enqueues_welcome_email(authed_client, monkeypatch):
+    from app.workers.tasks_email import send_welcome_email_task
+
+    enqueued = []
+    monkeypatch.setattr(send_welcome_email_task, "delay", lambda *args: enqueued.append(args))
+
+    resp = await authed_client.post(
+        "/api/v1/workspaces", json={"name": "Acme", "owner_email": "owner@acme.com", "owner_name": "Owner"}
+    )
+
+    assert resp.status_code == 201
+    assert enqueued == [("owner@acme.com", "Owner", "Acme")]
+
+
+async def test_create_workspace_without_owner_email_skips_welcome_email(authed_client, monkeypatch):
+    from app.workers.tasks_email import send_welcome_email_task
+
+    enqueued = []
+    monkeypatch.setattr(send_welcome_email_task, "delay", lambda *args: enqueued.append(args))
+
+    resp = await authed_client.post("/api/v1/workspaces", json={"name": "Acme"})
+
+    assert resp.status_code == 201
+    assert enqueued == []

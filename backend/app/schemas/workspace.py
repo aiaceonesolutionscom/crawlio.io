@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -8,6 +8,8 @@ PlanId = Literal["free", "pro", "enterprise"]
 
 class WorkspaceCreate(BaseModel):
     name: str
+    owner_email: Optional[str] = None
+    owner_name: Optional[str] = None
 
 
 class WorkspaceRead(BaseModel):

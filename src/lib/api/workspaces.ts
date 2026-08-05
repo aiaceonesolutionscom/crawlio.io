@@ -14,10 +14,10 @@ export function getMyWorkspace(token: string | null) {
   return apiFetch<WorkspaceDTO>('/api/v1/workspaces/me', token);
 }
 
-export function createWorkspace(token: string | null, name: string) {
+export function createWorkspace(token: string | null, name: string, ownerEmail?: string, ownerName?: string) {
   return apiFetch<WorkspaceDTO>('/api/v1/workspaces', token, {
     method: 'POST',
-    body: JSON.stringify({ name })
+    body: JSON.stringify({ name, owner_email: ownerEmail, owner_name: ownerName })
   });
 }
 

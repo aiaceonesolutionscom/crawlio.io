@@ -1,5 +1,7 @@
 import React from 'react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
+import { CrmBox } from '../../../shared/automation/CrmBox';
+import { AutomationTemplateGallery } from '../../../shared/automation/AutomationTemplateGallery';
 import { AutomationFlow } from '../components/AutomationFlow';
 
 export function Automation() {
@@ -9,6 +11,8 @@ export function Automation() {
         title="Automation Builder"
         description="Chain triggers, conditions and channel actions into a flow that works leads without a rep touching them." />
 
+      <CrmBox />
+      <AutomationTemplateGallery emailAgentPath="/app/pro/automation/email-agent" />
       <AutomationFlow />
     </div>);
 

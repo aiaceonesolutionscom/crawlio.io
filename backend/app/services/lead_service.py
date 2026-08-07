@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.crm import CrmEntry
 from app.db.models.lead import Lead, LeadEvent
 from app.db.models.workspace import Workspace
 from app.schemas.lead import LeadCreate, LeadUpdate
@@ -24,7 +25,6 @@ def _search_filter(query, search: str):
     like = f"%{search.lower()}%"
     return query.where(
         func.lower(Lead.name).like(like)
-        | func.lower(Lead.company).like(like)
         | func.lower(Lead.email).like(like)
     )
 
@@ -67,6 +67,38 @@ async def get_lead(session: AsyncSession, workspace_id: str, lead_id: str) -> Op
     return result.scalar_one_or_none()
 
 
+async def get_leads_by_ids(session: AsyncSession, workspace_id: str, lead_ids: list[str]) -> list[Lead]:
+    if not lead_ids:
+        return []
+    result = await session.execute(
+        select(Lead).where(Lead.workspace_id == workspace_id, Lead.id.in_(lead_ids))
+    )
+    return list(result.scalars().all())
+
+
+def apply_enrichment_to_lead(lead: Lead, found: dict) -> bool:
+    """Merges best-effort enrichment results (email/phone/social_links) onto an
+    existing lead, only filling gaps — never overwrites data already there.
+    Returns whether anything actually changed."""
+    changed = False
+    for field in ("email", "phone", "website"):
+        if not getattr(lead, field) and found.get(field):
+            setattr(lead, field, found[field])
+            changed = True
+
+    social = found.get("social_links")
+    if social:
+        metadata = dict(lead.lead_metadata or {})
+        existing_social = dict(metadata.get("social_links") or {})
+        merged = {**social, **existing_social}
+        if merged != existing_social:
+            metadata["social_links"] = merged
+            lead.lead_metadata = metadata
+            changed = True
+
+    return changed
+
+
 async def _find_duplicate(
     session: AsyncSession,
     workspace_id: str,
@@ -106,16 +138,20 @@ async def create_lead(session: AsyncSession, workspace: Workspace, data: LeadCre
 
     phone = re.sub(r"\s+", "", data.phone) if data.phone else None
 
+    metadata = dict(data.lead_metadata or {})
+    if data.social_links:
+        metadata["social_links"] = data.social_links
+
     lead = Lead(
         workspace_id=workspace.id,
         name=data.name,
-        company=data.company,
         email=data.email,
         phone=phone,
         website=data.website,
         address=data.address,
+        industry=data.industry,
         source=data.source,
-        lead_metadata=data.lead_metadata,
+        lead_metadata=metadata or None,
         status="New",
     )
     session.add(lead)
@@ -155,6 +191,12 @@ async def update_lead(
     if duplicate:
         raise DuplicateLeadError(duplicate)
 
+    social_links = updates.pop("social_links", None)
+    if social_links is not None:
+        metadata = dict(lead.lead_metadata or {})
+        metadata["social_links"] = social_links
+        lead.lead_metadata = metadata
+
     for field, value in updates.items():
         setattr(lead, field, value)
 
@@ -175,13 +217,35 @@ async def update_lead(
     return lead
 
 
+async def _delete_crm_entries_for_leads(session: AsyncSession, lead_ids: list[str]) -> None:
+    """A lead removed from the Leads table must not leave a dangling CRM
+    entry behind — CrmEntry.lead has no DB-level cascade, so the CRM list
+    would otherwise try to render a lead that no longer exists."""
+    if not lead_ids:
+        return
+    result = await session.execute(select(CrmEntry).where(CrmEntry.lead_id.in_(lead_ids)))
+    for entry in result.scalars().all():
+        await session.delete(entry)
+
+
 async def delete_lead(session: AsyncSession, workspace_id: str, lead_id: str) -> bool:
     lead = await get_lead(session, workspace_id, lead_id)
     if lead is None:
         return False
+    await _delete_crm_entries_for_leads(session, [lead_id])
     await session.delete(lead)
     await session.commit()
     return True
+
+
+async def delete_all_leads(session: AsyncSession, workspace_id: str) -> int:
+    result = await session.execute(select(Lead).where(Lead.workspace_id == workspace_id))
+    leads = list(result.scalars().all())
+    await _delete_crm_entries_for_leads(session, [lead.id for lead in leads])
+    for lead in leads:
+        await session.delete(lead)
+    await session.commit()
+    return len(leads)
 
 
 async def send_lead_email(session: AsyncSession, workspace: Workspace, lead_id: str) -> Lead:
@@ -253,20 +317,23 @@ async def export_leads_csv(
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
-        ["id", "name", "company", "email", "phone", "website", "address", "score", "status", "source", "created_at"]
+        ["id", "name", "email", "phone", "website", "address", "industry", "score", "status", "source",
+         "social_links", "created_at"]
     )
     for lead in leads:
+        social_links = (lead.lead_metadata or {}).get("social_links") or {}
         writer.writerow([
             lead.id,
             lead.name,
-            lead.company or "",
             lead.email or "",
             lead.phone or "",
             lead.website or "",
             lead.address or "",
+            lead.industry or "",
             lead.score if lead.score is not None else "",
             lead.status,
             lead.source or "",
+            "; ".join(f"{k}: {v}" for k, v in social_links.items()),
             lead.created_at.isoformat(),
         ])
     return buffer.getvalue()

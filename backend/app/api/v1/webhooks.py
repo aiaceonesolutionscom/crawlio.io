@@ -36,7 +36,6 @@ async def capture_inbound_lead(
         workspace,
         LeadCreate(
             name=payload.name,
-            company=payload.company,
             email=payload.email,
             phone=payload.phone,
             source=payload.source

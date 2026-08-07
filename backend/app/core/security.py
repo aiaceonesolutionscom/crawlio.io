@@ -32,6 +32,12 @@ def verify_clerk_jwt(token: str) -> dict[str, Any]:
             algorithms=["RS256"],
             issuer=settings.clerk_issuer,
             options={"require": ["exp", "iat", "sub"]},
+            # Clerk issues the token against its own clock, which is never
+            # perfectly in sync with this server's — without leeway, a token
+            # can be rejected as "not yet valid" (iat in the future) purely
+            # from a couple seconds of clock drift, well before it's actually
+            # anywhere near expiry.
+            leeway=60,
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(

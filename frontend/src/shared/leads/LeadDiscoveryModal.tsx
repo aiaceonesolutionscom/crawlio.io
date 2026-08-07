@@ -5,21 +5,41 @@ import { CheckIcon, Loader2Icon, SearchIcon, SparklesIcon, XIcon } from 'lucide-
 import { Button } from '../ui/Button';
 import { cn } from '../utils/cn';
 import { searchCountries, searchCities, type CountryDTO, type CityDTO } from '../../lib/api/geo';
-import { discoverLeads, importDiscoveredLeads, type DiscoveredLeadDTO } from '../../lib/api/discovery';
+import {
+  discoverLeads,
+  importDiscoveredLeads,
+  suggestNiches,
+  type DiscoveredLeadDTO
+} from '../../lib/api/discovery';
 import { ApiError } from '../../lib/api/client';
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onImported: () => void;
+  onWantManualAdd: () => void;
   resultCap: number;
   enhancedTier: boolean;
 }
 
-export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhancedTier }: Props) {
+export function LeadDiscoveryModal({
+  open,
+  onClose,
+  onImported,
+  onWantManualAdd,
+  resultCap,
+  enhancedTier
+}: Props) {
   const { getToken } = useAuth();
 
   const [niche, setNiche] = useState('');
+  const [nicheOptions, setNicheOptions] = useState<string[]>([]);
+  const [nicheOpen, setNicheOpen] = useState(false);
+  // Kept as a string so the field starts genuinely empty (not "0") and typing
+  // a digit replaces it cleanly instead of the browser inserting alongside a
+  // stray leading zero from a controlled numeric 0.
+  const [desiredCountRaw, setDesiredCountRaw] = useState('');
+  const desiredCount = desiredCountRaw === '' ? 0 : Math.min(Math.max(parseInt(desiredCountRaw, 10) || 0, 0), resultCap);
 
   const [countryQuery, setCountryQuery] = useState('');
   const [country, setCountry] = useState<CountryDTO | null>(null);
@@ -32,11 +52,15 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
   const [cityOpen, setCityOpen] = useState(false);
 
   const [isSearching, setIsSearching] = useState(false);
+  const [searchStage, setSearchStage] = useState('');
   const [searchError, setSearchError] = useState<string | null>(null);
   const [results, setResults] = useState<DiscoveredLeadDTO[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [enhanced, setEnhanced] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [dailyLimit, setDailyLimit] = useState<number | null>(null);
+  const [remainingToday, setRemainingToday] = useState<number | null>(null);
+  const [lastRequestedCount, setLastRequestedCount] = useState<number | null>(null);
 
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -44,6 +68,9 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
 
   const reset = () => {
     setNiche('');
+    setNicheOptions([]);
+    setNicheOpen(false);
+    setDesiredCountRaw('');
     setCountryQuery('');
     setCountry(null);
     setCountryOptions([]);
@@ -58,6 +85,9 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
     setSelected(new Set());
     setEnhanced(false);
     setHasSearched(false);
+    setDailyLimit(null);
+    setRemainingToday(null);
+    setLastRequestedCount(null);
     setIsImporting(false);
     setImportError(null);
     setImportSummary(null);
@@ -67,6 +97,16 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
     reset();
     onClose();
   };
+
+  useEffect(() => {
+    if (!open) return;
+    const timeout = window.setTimeout(async () => {
+      const token = await getToken();
+      const res = await suggestNiches(token, niche || undefined);
+      setNicheOptions(res.items);
+    }, 150);
+    return () => window.clearTimeout(timeout);
+  }, [niche, open, getToken]);
 
   useEffect(() => {
     if (!open || country) return;
@@ -91,25 +131,108 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
     return () => window.clearTimeout(timeout);
   }, [cityQuery, country, city, open, getToken]);
 
-  const canSearch = niche.trim().length > 0 && country !== null && city !== null && !isSearching;
+  // Real progress isn't pushed from the backend (the search is one blocking
+  // request), so this cycles honest, generically-true status text based on
+  // elapsed time — better than a bare spinner for a search that can take
+  // anywhere from ~2s to ~20s depending on OpenStreetMap mirror load.
+  useEffect(() => {
+    if (!isSearching) {
+      setSearchStage('');
+      return;
+    }
+    const stages = enhancedTier
+      ? [
+          'Searching OpenStreetMap…',
+          'Searching business directories with AI…',
+          'Checking business websites for contact info…',
+          'Looking up social profiles with AI…',
+          'Still working — some searches take a little longer…'
+        ]
+      : [
+          'Searching OpenStreetMap…',
+          'Checking business websites for contact info…',
+          'Filtering out incomplete listings…',
+          'Still working — some searches take a little longer…'
+        ];
+    let i = 0;
+    setSearchStage(stages[0]);
+    const interval = window.setInterval(() => {
+      i = Math.min(i + 1, stages.length - 1);
+      setSearchStage(stages[i]);
+    }, 3500);
+    return () => window.clearInterval(interval);
+  }, [isSearching, enhancedTier]);
+
+  const canSearch =
+    niche.trim().length > 0 &&
+    (country !== null || countryQuery.trim().length > 0) &&
+    (city !== null || cityQuery.trim().length > 0) &&
+    desiredCount > 0 &&
+    !isSearching;
 
   const handleSearch = async () => {
-    if (!niche.trim() || !country || !city) return;
+    if (!niche.trim()) return;
     setIsSearching(true);
     setSearchError(null);
     setHasSearched(true);
     setImportSummary(null);
     try {
       const token = await getToken();
+
+      // Selecting a suggestion from the dropdown is the normal path, but if the
+      // user just typed a name and hit Search without clicking a suggestion
+      // (easy to do, and previously left Search silently disabled forever),
+      // resolve it here instead of blocking them.
+      let resolvedCountry = country;
+      if (!resolvedCountry) {
+        if (!countryQuery.trim()) {
+          setSearchError('Pick a country.');
+          setIsSearching(false);
+          return;
+        }
+        const countryRes = await searchCountries(token, countryQuery.trim());
+        resolvedCountry = countryRes.items[0] ?? null;
+        if (!resolvedCountry) {
+          setSearchError(`No country matches "${countryQuery}". Try a different spelling.`);
+          setIsSearching(false);
+          return;
+        }
+        setCountry(resolvedCountry);
+        setCountryQuery('');
+      }
+
+      let resolvedCity = city;
+      if (!resolvedCity) {
+        if (!cityQuery.trim()) {
+          setSearchError('Pick a city.');
+          setIsSearching(false);
+          return;
+        }
+        const cityRes = await searchCities(token, resolvedCountry.code, cityQuery.trim());
+        resolvedCity = cityRes.items[0] ?? null;
+        if (!resolvedCity) {
+          setSearchError(`No city matches "${cityQuery}" in ${resolvedCountry.name}. Try a different spelling.`);
+          setIsSearching(false);
+          return;
+        }
+        setCity(resolvedCity);
+        setCityQuery('');
+      }
+
+      const requestedCount = Math.min(Math.max(desiredCount, 1), resultCap);
       const res = await discoverLeads(token, {
         niche: niche.trim(),
-        country: country.code,
-        city: city.name,
-        lat: city.lat,
-        lon: city.lon
+        country: resolvedCountry.code,
+        city: resolvedCity.name,
+        lat: resolvedCity.lat,
+        lon: resolvedCity.lon,
+        limit: requestedCount
       });
+      setLastRequestedCount(requestedCount);
       setResults(res.items);
       setEnhanced(res.enhanced);
+      setDailyLimit(res.daily_limit);
+      setRemainingToday(res.remaining_today);
       setSelected(new Set(res.items.map((_, i) => i)));
     } catch (err) {
       setSearchError(err instanceof ApiError ? err.message : 'Search failed. Please try again.');
@@ -140,11 +263,15 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
     try {
       const token = await getToken();
       const res = await importDiscoveredLeads(token, items);
-      const skippedCount = res.skipped.length;
-      setImportSummary(
-        `${res.created.length} lead${res.created.length === 1 ? '' : 's'} added` +
-          (skippedCount ? `, ${skippedCount} skipped (duplicate or quota reached)` : '')
-      );
+      const dailyCapped = res.skipped.filter((s) => s.reason === 'daily_limit_reached').length;
+      const otherSkipped = res.skipped.length - dailyCapped;
+      const parts = [`${res.created.length} lead${res.created.length === 1 ? '' : 's'} added`];
+      if (dailyCapped) parts.push(`${dailyCapped} hit today's daily limit`);
+      if (otherSkipped) parts.push(`${otherSkipped} skipped (duplicate or quota reached)`);
+      setImportSummary(parts.join(', '));
+      if (remainingToday !== null) {
+        setRemainingToday(Math.max(remainingToday - res.created.length, 0));
+      }
       setResults((prev) => prev.filter((_, i) => !selected.has(i)));
       setSelected(new Set());
       onImported();
@@ -199,8 +326,8 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
             </div>
 
             <div className="flex flex-col gap-4 overflow-y-auto px-6 py-5 scrollbar-slim">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div>
+              <div className="grid gap-3 sm:grid-cols-4">
+                <div className="relative">
                   <label htmlFor="discover-niche" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
                     Niche
                   </label>
@@ -208,9 +335,31 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
                     id="discover-niche"
                     value={niche}
                     onChange={(e) => setNiche(e.target.value)}
-                    placeholder="Dental, restaurant, salon…"
+                    onFocus={() => setNicheOpen(true)}
+                    onBlur={() => window.setTimeout(() => setNicheOpen(false), 120)}
+                    placeholder="Dental clinic, restaurant, salon…"
+                    autoComplete="off"
                     className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none"
                   />
+                  {nicheOpen && nicheOptions.length > 0 && (
+                    <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-ink-700 bg-ink-850 py-1 shadow-xl scrollbar-slim">
+                      {nicheOptions.map((n) => (
+                        <li key={n}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setNiche(n);
+                              setNicheOpen(false);
+                            }}
+                            className="block w-full px-3.5 py-2 text-left text-[13.5px] text-chalk hover:bg-ink-800"
+                          >
+                            {n}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
 
                 <div className="relative">
@@ -295,17 +444,59 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
                     </ul>
                   )}
                 </div>
+
+                <div>
+                  <label htmlFor="discover-count" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
+                    How many
+                  </label>
+                  <input
+                    id="discover-count"
+                    type="number"
+                    min={0}
+                    max={resultCap}
+                    value={desiredCountRaw}
+                    onChange={(e) => setDesiredCountRaw(e.target.value.replace(/[^\d]/g, ''))}
+                    onBlur={() => {
+                      if (desiredCountRaw === '') return;
+                      setDesiredCountRaw(String(Math.min(Math.max(parseInt(desiredCountRaw, 10) || 0, 0), resultCap)));
+                    }}
+                    placeholder="Add number of leads"
+                    className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none"
+                  />
+                </div>
               </div>
 
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-[12.5px] text-chalk-faint">
-                  Up to {resultCap} results per search{enhancedTier ? ' · enhanced with AI-assisted contact lookup' : ''}.
-                </p>
-                <Button size="sm" disabled={!canSearch} onClick={() => void handleSearch()}>
-                  {isSearching ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <SearchIcon className="h-4 w-4" />}
-                  {isSearching ? 'Searching…' : 'Search'}
-                </Button>
-              </div>
+              {desiredCount === 0 ? (
+                <div className="flex flex-col gap-3 rounded-lg border border-ink-800 bg-ink-850/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-[12.5px] text-chalk-faint">
+                    Looking for a specific business you already know? Search isn't useful with 0 results — add it
+                    directly instead.
+                  </p>
+                  <Button size="sm" variant="outline" onClick={onWantManualAdd}>
+                    Add lead manually
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <p className={cn('text-[12.5px]', isSearching ? 'text-signal' : 'text-chalk-faint')}>
+                    {isSearching ? (
+                      searchStage
+                    ) : (
+                      <>
+                        Up to {resultCap} results per search
+                        {enhancedTier ? ' · enhanced with AI-assisted contact lookup' : ''}.
+                        {remainingToday !== null && dailyLimit !== null && (
+                          <> {remainingToday} of {dailyLimit} adds left today.</>
+                        )}
+                      </>
+                    )}
+                  </p>
+                  <Button size="sm" disabled={!canSearch} onClick={() => void handleSearch()}>
+                    {isSearching ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <SearchIcon className="h-4 w-4" />}
+                    {isSearching ? 'Searching…' : 'Search'}
+                  </Button>
+                </div>
+              )}
 
               {searchError && (
                 <p role="alert" className="rounded-lg border border-ember/40 bg-ember/10 px-3.5 py-2.5 text-[13px] text-ember">
@@ -342,9 +533,17 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
                     )}
                   </div>
 
+                  {results.length > 0 && lastRequestedCount !== null && results.length < lastRequestedCount && (
+                    <p className="border-b border-ink-800 bg-ink-850/40 px-4 py-2 text-[12px] text-chalk-faint">
+                      You asked for {lastRequestedCount}, but OpenStreetMap only has {results.length} real{' '}
+                      {niche.trim()} listings with contact info for this area — that's all of what exists there,
+                      not a limit on our side.
+                    </p>
+                  )}
+
                   {results.length === 0 ? (
                     <p className="px-4 py-8 text-center text-[13.5px] text-chalk-dim">
-                      No businesses found for that niche and city. Try a broader niche term.
+                      No businesses found for that niche and city. Try a broader niche term or a larger nearby city.
                     </p>
                   ) : (
                     <ul className="max-h-72 divide-y divide-ink-850 overflow-y-auto scrollbar-slim">
@@ -362,20 +561,40 @@ export function LeadDiscoveryModal({ open, onClose, onImported, resultCap, enhan
                             {selected.has(i) && <CheckIcon className="h-3 w-3" />}
                           </button>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-[13.5px] font-medium text-chalk">{r.name}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-[13.5px] font-medium text-chalk">{r.name}</p>
+                              {r.industry && (
+                                <span className="shrink-0 rounded-full border border-ink-700 px-2 py-0.5 text-[10.5px] text-chalk-faint">
+                                  {r.industry}
+                                </span>
+                              )}
+                            </div>
                             <p className="truncate text-[12px] text-chalk-faint">
                               {[r.address, r.phone, r.email].filter(Boolean).join(' · ') || 'No contact details found'}
                             </p>
-                            {r.website && (
-                              <a
-                                href={r.website}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="truncate text-[12px] text-signal hover:underline"
-                              >
-                                {r.website}
-                              </a>
-                            )}
+                            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                              {r.website && (
+                                <a
+                                  href={r.website}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="truncate text-[12px] text-signal hover:underline"
+                                >
+                                  {r.website}
+                                </a>
+                              )}
+                              {Object.entries(r.social_links ?? {}).map(([platform, url]) => (
+                                <a
+                                  key={platform}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="truncate text-[12px] capitalize text-signal hover:underline"
+                                >
+                                  {platform}
+                                </a>
+                              ))}
+                            </div>
                           </div>
                         </li>
                       ))}

@@ -6,6 +6,8 @@ export interface DiscoveredLeadDTO {
   email: string | null;
   website: string | null;
   address: string | null;
+  industry: string | null;
+  social_links: Record<string, string>;
   source: string;
 }
 
@@ -15,6 +17,7 @@ export interface DiscoverParams {
   city: string;
   lat: number;
   lon: number;
+  limit?: number;
 }
 
 export interface DiscoverResponseDTO {
@@ -22,6 +25,13 @@ export interface DiscoverResponseDTO {
   total: number;
   limit: number;
   enhanced: boolean;
+  daily_limit: number;
+  remaining_today: number;
+}
+
+export function suggestNiches(token: string | null, q?: string) {
+  const query = q ? `?q=${encodeURIComponent(q)}` : '';
+  return apiFetch<{ items: string[] }>(`/api/v1/leads/discover/niches${query}`, token);
 }
 
 export function discoverLeads(token: string | null, params: DiscoverParams) {

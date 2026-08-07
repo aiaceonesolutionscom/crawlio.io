@@ -6,7 +6,9 @@ export function Leads() {
       tier="pro"
       searchEnabled
       whatsappEnabled
+      bulkExportEnabled
       discoveryCap={100}
-      discoveryEnhanced />
+      discoveryEnhanced
+      aiFilterEnabled />
   );
 }

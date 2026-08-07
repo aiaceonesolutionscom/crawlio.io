@@ -22,6 +22,7 @@ const ProLayout = lazy(() => import('./app/pro/ProLayout').then((m) => ({ defaul
 const ProOverview = lazy(() => import('./app/pro/pages/Overview').then((m) => ({ default: m.Overview })));
 const ProLeads = lazy(() => import('./app/pro/pages/Leads').then((m) => ({ default: m.Leads })));
 const ProAutomation = lazy(() => import('./app/pro/pages/Automation').then((m) => ({ default: m.Automation })));
+const ProEmailAgent = lazy(() => import('./app/pro/pages/EmailAgent').then((m) => ({ default: m.EmailAgent })));
 const ProAnalytics = lazy(() => import('./app/pro/pages/Analytics').then((m) => ({ default: m.Analytics })));
 const ProTeam = lazy(() => import('./app/pro/pages/Team').then((m) => ({ default: m.Team })));
 const ProSettings = lazy(() => import('./app/pro/pages/Settings').then((m) => ({ default: m.Settings })));
@@ -30,6 +31,9 @@ const EnterpriseLayout = lazy(() => import('./app/enterprise/EnterpriseLayout').
 const EnterpriseOverview = lazy(() => import('./app/enterprise/pages/Overview').then((m) => ({ default: m.Overview })));
 const EnterpriseLeads = lazy(() => import('./app/enterprise/pages/Leads').then((m) => ({ default: m.Leads })));
 const EnterpriseAutomation = lazy(() => import('./app/enterprise/pages/Automation').then((m) => ({ default: m.Automation })));
+const EnterpriseEmailAgent = lazy(() =>
+  import('./app/enterprise/pages/EmailAgent').then((m) => ({ default: m.EmailAgent }))
+);
 const EnterpriseAnalytics = lazy(() => import('./app/enterprise/pages/Analytics').then((m) => ({ default: m.Analytics })));
 const EnterpriseTeam = lazy(() => import('./app/enterprise/pages/Team').then((m) => ({ default: m.Team })));
 const EnterpriseSettings = lazy(() => import('./app/enterprise/pages/Settings').then((m) => ({ default: m.Settings })));
@@ -88,6 +92,7 @@ export function App() {
               <Route index element={<ProOverview />} />
               <Route path="leads" element={<ProLeads />} />
               <Route path="automation" element={<ProAutomation />} />
+              <Route path="automation/email-agent" element={<ProEmailAgent />} />
               <Route path="analytics" element={<ProAnalytics />} />
               <Route path="team" element={<ProTeam />} />
               <Route path="settings" element={<ProSettings />} />
@@ -106,6 +111,7 @@ export function App() {
               <Route index element={<EnterpriseOverview />} />
               <Route path="leads" element={<EnterpriseLeads />} />
               <Route path="automation" element={<EnterpriseAutomation />} />
+              <Route path="automation/email-agent" element={<EnterpriseEmailAgent />} />
               <Route path="analytics" element={<EnterpriseAnalytics />} />
               <Route path="team" element={<EnterpriseTeam />} />
               <Route path="settings" element={<EnterpriseSettings />} />

@@ -6,24 +6,26 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class LeadCreate(BaseModel):
     name: str
-    company: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     website: Optional[str] = None
     address: Optional[str] = None
+    industry: Optional[str] = None
     source: Optional[str] = None
+    social_links: Optional[dict[str, str]] = None
     lead_metadata: Optional[dict[str, Any]] = None
 
 
 class LeadUpdate(BaseModel):
     name: Optional[str] = None
-    company: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     website: Optional[str] = None
     address: Optional[str] = None
+    industry: Optional[str] = None
     status: Optional[str] = None
     source: Optional[str] = None
+    social_links: Optional[dict[str, str]] = None
 
 
 class LeadRead(BaseModel):
@@ -32,15 +34,16 @@ class LeadRead(BaseModel):
     id: str
     workspace_id: str
     name: str
-    company: Optional[str]
     email: Optional[str]
     phone: Optional[str]
     website: Optional[str]
     address: Optional[str]
+    industry: Optional[str]
     score: Optional[int]
     status: str
     source: Optional[str]
     scoring_failed: bool = False
+    social_links: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -50,6 +53,15 @@ class LeadListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class LeadEnrichRequest(BaseModel):
+    lead_ids: list[str]
+
+
+class LeadEnrichResult(BaseModel):
+    enriched: int
+    unchanged: int
 
 
 class LeadEmailResponse(BaseModel):
@@ -66,15 +78,16 @@ def lead_to_read(lead) -> LeadRead:
         id=lead.id,
         workspace_id=lead.workspace_id,
         name=lead.name,
-        company=lead.company,
         email=lead.email,
         phone=lead.phone,
         website=lead.website,
         address=lead.address,
+        industry=lead.industry,
         score=lead.score,
         status=lead.status,
         source=lead.source,
         scoring_failed=bool(metadata.get("scoring_failed")),
+        social_links=metadata.get("social_links") or {},
         created_at=lead.created_at,
         updated_at=lead.updated_at,
     )

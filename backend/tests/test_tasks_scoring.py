@@ -22,7 +22,7 @@ async def test_score_lead_async_updates_lead(db_engine, monkeypatch):
         await session.commit()
 
         lead = await lead_service.create_lead(
-            session, workspace, LeadCreate(name="Amara Okafor", company="Northwind")
+            session, workspace, LeadCreate(name="Amara Okafor")
         )
         lead_id = lead.id
 

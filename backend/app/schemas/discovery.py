@@ -11,6 +11,7 @@ class DiscoverRequest(BaseModel):
     city: str
     lat: float
     lon: float
+    limit: Optional[int] = None  # how many results the user wants; capped server-side by plan
 
 
 class DiscoveredLead(BaseModel):
@@ -19,6 +20,8 @@ class DiscoveredLead(BaseModel):
     email: Optional[str] = None
     website: Optional[str] = None
     address: Optional[str] = None
+    industry: Optional[str] = None
+    social_links: dict[str, str] = {}
     source: str = "openstreetmap"
 
 
@@ -27,6 +30,8 @@ class DiscoverResponse(BaseModel):
     total: int
     limit: int
     enhanced: bool = False
+    daily_limit: int
+    remaining_today: int
 
 
 class DiscoveryImportRequest(BaseModel):

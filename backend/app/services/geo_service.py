@@ -44,6 +44,9 @@ async def search_cities(country_code: str, query: str, limit: int = 8) -> list[d
         "format": "jsonv2",
         "addressdetails": "1",
         "limit": str(limit),
+        # Without this, Nominatim returns names in the local script (e.g. "کراچی"
+        # for Karachi) based on the region rather than English.
+        "accept-language": "en",
     }
     try:
         async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:

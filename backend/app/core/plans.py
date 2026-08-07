@@ -1,14 +1,26 @@
 PLAN_CAPABILITIES: dict[str, set[str]] = {
-    "free": {"leads", "workspaces", "lead_discovery"},
-    "pro": {"leads", "workspaces", "automation", "analytics", "team", "whatsapp", "lead_discovery", "lead_discovery_enhanced"},
+    "free": {"leads", "workspaces", "lead_discovery", "export"},
+    "pro": {
+        "leads", "workspaces", "automation", "analytics", "team", "whatsapp", "export",
+        "lead_discovery", "lead_discovery_enhanced", "ai_lead_filter", "email_agent",
+    },
     "enterprise": {
         "leads", "workspaces", "automation", "analytics", "team", "whatsapp", "branding", "sso", "export",
-        "lead_discovery", "lead_discovery_enhanced",
+        "lead_discovery", "lead_discovery_enhanced", "ai_lead_filter", "email_agent",
     },
 }
 
 # Lead Discovery result cap per search, by plan.
 DISCOVERY_LIMITS: dict[str, int] = {
+    "free": 50,
+    "pro": 100,
+    "enterprise": 200,
+}
+
+# Max leads that can be *added* (imported) via Lead Discovery per rolling calendar
+# day, by plan — independent of the per-search result cap above and of the
+# workspace's overall lead_quota.
+DAILY_DISCOVERY_IMPORT_LIMITS: dict[str, int] = {
     "free": 50,
     "pro": 100,
     "enterprise": 200,

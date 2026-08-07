@@ -40,15 +40,15 @@ async def test_leads_are_isolated_per_workspace(client_factory, monkeypatch):
     assert names_a == ["Alice"]
 
 
-async def test_lead_search_filters_by_name_company_email(client_factory, monkeypatch):
+async def test_lead_search_filters_by_name_and_email(client_factory, monkeypatch):
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
 
     async with client_factory("user_search") as client:
         await client.post("/api/v1/workspaces", json={"name": "Acme"})
-        await client.post("/api/v1/leads", json={"name": "Priya Raman", "company": "Loop Retail"})
-        await client.post("/api/v1/leads", json={"name": "Tomas Ferreira", "company": "Cascade Solar"})
+        await client.post("/api/v1/leads", json={"name": "Priya Raman", "email": "priya@loopretail.com"})
+        await client.post("/api/v1/leads", json={"name": "Tomas Ferreira", "email": "tomas@cascadesolar.com"})
 
-        resp = await client.get("/api/v1/leads", params={"search": "loop"})
+        resp = await client.get("/api/v1/leads", params={"search": "loopretail"})
 
     names = [item["name"] for item in resp.json()["items"]]
     assert names == ["Priya Raman"]
@@ -91,6 +91,22 @@ async def test_get_update_delete_lead(client_factory, monkeypatch):
 
         missing = await client.get(f"/api/v1/leads/{lead_id}")
         assert missing.status_code == 404
+
+
+async def test_delete_all_leads(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_delete_all") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        await client.post("/api/v1/leads", json={"name": "Alice"})
+        await client.post("/api/v1/leads", json={"name": "Bob"})
+
+        resp = await client.delete("/api/v1/leads")
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == 2
+
+        listed = await client.get("/api/v1/leads")
+        assert listed.json()["total"] == 0
 
 
 async def test_duplicate_email_rejected(client_factory, monkeypatch):
@@ -137,3 +153,59 @@ async def test_whatsapp_requires_pro_plan(client_factory, monkeypatch):
         resp = await client.post(f"/api/v1/leads/{lead_id}/whatsapp")
 
     assert resp.status_code == 403
+
+
+async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch):
+    from app.services import website_scraper_service
+
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async def fake_extract(url):
+        return {"email": "found@example.com", "phone": "+15551234567", "social_links": {"facebook": "https://facebook.com/x"}}
+
+    monkeypatch.setattr(website_scraper_service, "extract_contact_from_website", fake_extract)
+
+    async with client_factory("user_enrich") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        created = await client.post(
+            "/api/v1/leads", json={"name": "No Contact Yet", "website": "https://noemail.example.com"}
+        )
+        lead_id = created.json()["id"]
+
+        resp = await client.post("/api/v1/leads/enrich", json={"lead_ids": [lead_id]})
+        assert resp.status_code == 200
+        assert resp.json() == {"enriched": 1, "unchanged": 0}
+
+        updated = await client.get(f"/api/v1/leads/{lead_id}")
+
+    body = updated.json()
+    assert body["email"] == "found@example.com"
+    assert body["phone"] == "+15551234567"
+    assert body["social_links"] == {"facebook": "https://facebook.com/x"}
+
+
+async def test_enrich_leads_does_not_overwrite_existing_data(client_factory, monkeypatch):
+    from app.services import website_scraper_service
+
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async def fake_extract(url):
+        return {"email": "scraped@example.com", "phone": "+15559999999"}
+
+    monkeypatch.setattr(website_scraper_service, "extract_contact_from_website", fake_extract)
+
+    async with client_factory("user_enrich_noop") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        created = await client.post(
+            "/api/v1/leads",
+            json={"name": "Already Complete", "email": "real@example.com", "website": "https://example.com"},
+        )
+        lead_id = created.json()["id"]
+
+        resp = await client.post("/api/v1/leads/enrich", json={"lead_ids": [lead_id]})
+        assert resp.json()["enriched"] == 1  # phone still got filled in
+
+        updated = await client.get(f"/api/v1/leads/{lead_id}")
+
+    assert updated.json()["email"] == "real@example.com"  # untouched
+    assert updated.json()["phone"] == "+15559999999"  # gap filled

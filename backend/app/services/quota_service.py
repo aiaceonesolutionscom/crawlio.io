@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,23 @@ from app.db.models.workspace import Workspace, WorkspaceMember
 
 async def count_leads(session: AsyncSession, workspace_id: str) -> int:
     result = await session.execute(select(func.count()).select_from(Lead).where(Lead.workspace_id == workspace_id))
+    return result.scalar_one()
+
+
+async def count_discovery_leads_today(session: AsyncSession, workspace_id: str) -> int:
+    """How many leads this workspace has imported via Lead Discovery since
+    midnight UTC today — the daily cap is separate from (and usually much
+    smaller than) the overall lead_quota."""
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    result = await session.execute(
+        select(func.count())
+        .select_from(Lead)
+        .where(
+            Lead.workspace_id == workspace_id,
+            Lead.source.like("Lead Discovery%"),
+            Lead.created_at >= today_start,
+        )
+    )
     return result.scalar_one()
 
 

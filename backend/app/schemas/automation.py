@@ -50,7 +50,6 @@ class SequenceStatusUpdate(BaseModel):
 
 class InboundLeadCapture(BaseModel):
     name: str
-    company: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     source: Optional[str] = "webhook"

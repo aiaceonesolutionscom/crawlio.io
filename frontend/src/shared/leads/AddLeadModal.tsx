@@ -15,21 +15,21 @@ interface Props {
 export function AddLeadModal({ open, onClose, onCreated }: Props) {
   const { getToken } = useAuth();
   const [name, setName] = useState('');
-  const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [website, setWebsite] = useState('');
   const [address, setAddress] = useState('');
+  const [industry, setIndustry] = useState('');
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
     setName('');
-    setCompany('');
     setEmail('');
     setPhone('');
     setWebsite('');
     setAddress('');
+    setIndustry('');
     setError(null);
   };
 
@@ -46,11 +46,11 @@ export function AddLeadModal({ open, onClose, onCreated }: Props) {
       const token = await getToken();
       await createLead(token, {
         name,
-        company: company || undefined,
         email: email || undefined,
         phone: phone || undefined,
         website: website || undefined,
         address: address || undefined,
+        industry: industry || undefined,
         source: 'Manual entry'
       });
       reset();
@@ -84,7 +84,7 @@ export function AddLeadModal({ open, onClose, onCreated }: Props) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 16, scale: 0.98 }}
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-          className="relative w-full max-w-[480px] overflow-hidden rounded-t-2xl border border-ink-700 bg-ink-900 sm:rounded-2xl">
+          className="relative flex max-h-[88vh] w-full max-w-[480px] flex-col overflow-hidden rounded-t-2xl border border-ink-700 bg-ink-900 sm:rounded-2xl">
 
             <div className="flex items-start justify-between gap-4 border-b border-ink-850 px-6 py-5">
               <h2 id="add-lead-title" className="font-display text-[18px] font-semibold tracking-tight text-chalk">
@@ -100,7 +100,8 @@ export function AddLeadModal({ open, onClose, onCreated }: Props) {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5">
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5 scrollbar-slim">
               <div>
                 <label htmlFor="lead-name" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
                   Full name
@@ -111,18 +112,6 @@ export function AddLeadModal({ open, onClose, onCreated }: Props) {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Amara Okafor"
-                  className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
-
-              </div>
-              <div>
-                <label htmlFor="lead-company" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                  Company
-                </label>
-                <input
-                  id="lead-company"
-                  value={company}
-                  onChange={(e) => setCompany(e.target.value)}
-                  placeholder="Northwind Logistics"
                   className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
 
               </div>
@@ -175,14 +164,27 @@ export function AddLeadModal({ open, onClose, onCreated }: Props) {
                   className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
 
               </div>
+              <div>
+                <label htmlFor="lead-industry" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
+                  Industry
+                </label>
+                <input
+                  id="lead-industry"
+                  value={industry}
+                  onChange={(e) => setIndustry(e.target.value)}
+                  placeholder="Dental Clinic"
+                  className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none" />
+
+              </div>
 
               {error &&
               <p role="alert" className="rounded-lg border border-ember/40 bg-ember/10 px-3.5 py-2.5 text-[13px] text-ember">
                   {error}
                 </p>
               }
+              </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2 border-t border-ink-850 px-6 py-4">
                 <Button type="button" variant="outline" onClick={handleClose}>
                   Cancel
                 </Button>

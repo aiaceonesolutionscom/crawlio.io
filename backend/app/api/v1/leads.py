@@ -1,25 +1,35 @@
+import asyncio
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_workspace, require_plan
+from app.core.plans import PLAN_CAPABILITIES
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
+from app.schemas.crm import AiFilterResponse
 from app.schemas.lead import (
     LeadCreate,
     LeadEmailResponse,
+    LeadEnrichRequest,
+    LeadEnrichResult,
     LeadListResponse,
     LeadRead,
     LeadUpdate,
     LeadWhatsAppResponse,
     lead_to_read,
 )
-from app.services import lead_service
+from app.services import browser_scraper_service, crm_service, lead_service, tavily_service, website_scraper_service
 from app.services.lead_service import DuplicateLeadError
 from app.workers.tasks_scoring import score_lead_task
 
 router = APIRouter(prefix="/leads", tags=["leads"])
+
+# How many selected leads get a per-lead enrichment pass in one request —
+# bounded so a large bulk selection can't turn into dozens of concurrent
+# outbound HTTP calls (website fetches, and Tavily searches for Pro+).
+MAX_ENRICH_PER_REQUEST = 30
 
 
 def _duplicate_error(field: str) -> HTTPException:
@@ -36,7 +46,7 @@ async def list_leads(
     session: Annotated[AsyncSession, Depends(get_session)],
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
-    limit: int = Query(default=25, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=100),
 ):
     leads, total = await lead_service.list_leads(session, workspace.id, search, page=page, limit=limit)
     return LeadListResponse(
@@ -45,6 +55,15 @@ async def list_leads(
         page=page,
         limit=limit,
     )
+
+
+@router.delete("")
+async def delete_all_leads(
+    workspace: Annotated[Workspace, Depends(get_current_workspace)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    deleted = await lead_service.delete_all_leads(session, workspace.id)
+    return {"deleted": deleted}
 
 
 @router.get("/export")
@@ -59,6 +78,81 @@ async def export_leads(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="leads-export.csv"'},
     )
+
+
+@router.get("/ai-filter", response_model=AiFilterResponse)
+async def ai_filter_leads(
+    workspace: Annotated[Workspace, Depends(require_plan("ai_lead_filter"))],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    with_website, without_website = await crm_service.ai_filter_leads(session, workspace.id)
+    return AiFilterResponse(
+        with_website=[lead_to_read(l) for l in with_website],
+        without_website=[lead_to_read(l) for l in without_website],
+    )
+
+
+@router.post("/enrich", response_model=LeadEnrichResult)
+async def enrich_leads(
+    payload: LeadEnrichRequest,
+    workspace: Annotated[Workspace, Depends(get_current_workspace)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    """Re-run contact enrichment on leads that already exist — useful for
+    leads that were added manually, imported incomplete, or missed contact
+    info the first time. Never overwrites data that's already there, only
+    fills gaps."""
+    lead_ids = payload.lead_ids[:MAX_ENRICH_PER_REQUEST]
+    leads = await lead_service.get_leads_by_ids(session, workspace.id, lead_ids)
+    enhanced = "lead_discovery_enhanced" in PLAN_CAPABILITIES.get(workspace.plan, set())
+
+    # Websites found for this batch, keyed by lead id — a lead without a
+    # website yet gets one from Tavily (Pro+ only), then every lead with a
+    # website (original or freshly found) gets scraped for contact details.
+    found_websites: dict[str, str] = {}
+    if enhanced:
+        missing_website_leads = [lead for lead in leads if not lead.website]
+        if missing_website_leads:
+            url_lookups = await asyncio.gather(
+                *(
+                    tavily_service.find_website_url(lead.name, lead.address or "", "")
+                    for lead in missing_website_leads
+                ),
+                return_exceptions=True,
+            )
+            for lead, url in zip(missing_website_leads, url_lookups):
+                if isinstance(url, str) and url:
+                    found_websites[lead.id] = url
+
+    scrapable = [lead for lead in leads if lead.website or lead.id in found_websites]
+    urls = [lead.website or found_websites[lead.id] for lead in scrapable]
+
+    if enhanced:
+        # A real headless-browser scrape (renders JS, follows /contact &
+        # /about) — the fuller extraction Pro's "total data" promise is built on.
+        scraped = await browser_scraper_service.extract_contact_details(urls)
+    else:
+        scraped = await asyncio.gather(
+            *(website_scraper_service.extract_contact_from_website(url) for url in urls),
+            return_exceptions=True,
+        )
+
+    found_by_lead_id: dict[str, dict] = {}
+    for lead, found in zip(scrapable, scraped):
+        if isinstance(found, dict):
+            found_by_lead_id[lead.id] = dict(found)
+
+    for lead_id, website in found_websites.items():
+        found_by_lead_id.setdefault(lead_id, {})["website"] = website
+
+    enriched_count = 0
+    for lead in leads:
+        found = found_by_lead_id.get(lead.id, {})
+        if found and lead_service.apply_enrichment_to_lead(lead, found):
+            enriched_count += 1
+    await session.commit()
+
+    return LeadEnrichResult(enriched=enriched_count, unchanged=len(leads) - enriched_count)
 
 
 @router.post("", response_model=LeadRead, status_code=status.HTTP_201_CREATED)

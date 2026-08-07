@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Loader2Icon, XIcon } from 'lucide-react';
+import { ExternalLinkIcon, Loader2Icon, MapPinIcon, XIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { updateLead, type LeadDTO } from '../../lib/api/leads';
 import { ApiError } from '../../lib/api/client';
@@ -18,11 +18,11 @@ interface Props {
 export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
   const { getToken } = useAuth();
   const [name, setName] = useState('');
-  const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [website, setWebsite] = useState('');
   const [address, setAddress] = useState('');
+  const [industry, setIndustry] = useState('');
   const [status, setStatus] = useState<LeadStatus>('New');
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +30,11 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
   useEffect(() => {
     if (!lead) return;
     setName(lead.name);
-    setCompany(lead.company ?? '');
     setEmail(lead.email ?? '');
     setPhone(lead.phone ?? '');
     setWebsite(lead.website ?? '');
     setAddress(lead.address ?? '');
+    setIndustry(lead.industry ?? '');
     setStatus(lead.status);
     setError(null);
   }, [lead]);
@@ -53,11 +53,11 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
       const token = await getToken();
       await updateLead(token, lead.id, {
         name,
-        company: company || undefined,
         email: email || undefined,
         phone: phone || undefined,
         website: website || undefined,
         address: address || undefined,
+        industry: industry || undefined,
         status
       });
       onUpdated();
@@ -90,7 +90,7 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 16, scale: 0.98 }}
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-          className="relative w-full max-w-[480px] overflow-hidden rounded-t-2xl border border-ink-700 bg-ink-900 sm:rounded-2xl">
+          className="relative flex max-h-[88vh] w-full max-w-[480px] flex-col overflow-hidden rounded-t-2xl border border-ink-700 bg-ink-900 sm:rounded-2xl">
 
             <div className="flex items-start justify-between gap-4 border-b border-ink-850 px-6 py-5">
               <h2 id="edit-lead-title" className="font-display text-[18px] font-semibold tracking-tight text-chalk">
@@ -106,7 +106,8 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5">
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5 scrollbar-slim">
               <div>
                 <label htmlFor="edit-lead-name" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
                   Full name
@@ -116,17 +117,6 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk focus:border-signal focus:outline-none" />
-
-              </div>
-              <div>
-                <label htmlFor="edit-lead-company" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                  Company
-                </label>
-                <input
-                  id="edit-lead-company"
-                  value={company}
-                  onChange={(e) => setCompany(e.target.value)}
                   className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk focus:border-signal focus:outline-none" />
 
               </div>
@@ -154,9 +144,22 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
 
               </div>
               <div>
-                <label htmlFor="edit-lead-website" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                  Website
-                </label>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label htmlFor="edit-lead-website" className="block text-[13px] font-medium text-chalk-dim">
+                    Website
+                  </label>
+                  {website &&
+                  <a
+                    href={/^https?:\/\//.test(website) ? website : `https://${website}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open website"
+                    className="flex items-center gap-1 text-[12px] text-signal hover:underline">
+
+                      <ExternalLinkIcon className="h-3 w-3" /> View
+                    </a>
+                  }
+                </div>
                 <input
                   id="edit-lead-website"
                   value={website}
@@ -165,9 +168,22 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
 
               </div>
               <div>
-                <label htmlFor="edit-lead-address" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
-                  Address
-                </label>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label htmlFor="edit-lead-address" className="block text-[13px] font-medium text-chalk-dim">
+                    Address
+                  </label>
+                  {address &&
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open in Google Maps"
+                    className="flex items-center gap-1 text-[12px] text-signal hover:underline">
+
+                      <MapPinIcon className="h-3 w-3" /> View on map
+                    </a>
+                  }
+                </div>
                 <input
                   id="edit-lead-address"
                   value={address}
@@ -175,6 +191,35 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
                   className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk focus:border-signal focus:outline-none" />
 
               </div>
+              <div>
+                <label htmlFor="edit-lead-industry" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
+                  Industry
+                </label>
+                <input
+                  id="edit-lead-industry"
+                  value={industry}
+                  onChange={(e) => setIndustry(e.target.value)}
+                  className="h-11 w-full rounded-lg border border-ink-700 bg-ink-950 px-3.5 text-[14px] text-chalk focus:border-signal focus:outline-none" />
+
+              </div>
+              {lead && Object.keys(lead.social_links ?? {}).length > 0 &&
+              <div>
+                  <p className="mb-1.5 text-[13px] font-medium text-chalk-dim">Social links</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(lead.social_links).map(([platform, url]) =>
+                  <a
+                    key={platform}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full border border-ink-700 px-3 py-1 text-[12px] capitalize text-signal hover:border-signal/50 hover:underline">
+
+                        {platform}
+                      </a>
+                  )}
+                  </div>
+                </div>
+              }
               <div>
                 <label htmlFor="edit-lead-status" className="mb-1.5 block text-[13px] font-medium text-chalk-dim">
                   Status
@@ -196,8 +241,9 @@ export function EditLeadModal({ lead, onClose, onUpdated }: Props) {
                   {error}
                 </p>
               }
+              </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2 border-t border-ink-850 px-6 py-4">
                 <Button type="button" variant="outline" onClick={handleClose}>
                   Cancel
                 </Button>

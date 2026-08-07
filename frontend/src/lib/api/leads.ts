@@ -5,15 +5,16 @@ export interface LeadDTO {
   id: string;
   workspace_id: string;
   name: string;
-  company: string | null;
   email: string | null;
   phone: string | null;
   website: string | null;
   address: string | null;
+  industry: string | null;
   score: number | null;
   status: LeadStatus;
   source: string | null;
   scoring_failed: boolean;
+  social_links: Record<string, string>;
   created_at: string;
   updated_at: string;
 }
@@ -50,21 +51,23 @@ export function getLead(token: string | null, id: string) {
 
 export interface CreateLeadInput {
   name: string;
-  company?: string;
   email?: string;
   phone?: string;
   website?: string;
   address?: string;
+  industry?: string;
+  social_links?: Record<string, string>;
   source?: string;
 }
 
 export interface UpdateLeadInput {
   name?: string;
-  company?: string;
   email?: string;
   phone?: string;
   website?: string;
   address?: string;
+  industry?: string;
+  social_links?: Record<string, string>;
   status?: LeadStatus;
   source?: string;
 }
@@ -85,6 +88,17 @@ export function updateLead(token: string | null, id: string, input: UpdateLeadIn
 
 export function deleteLead(token: string | null, id: string) {
   return apiFetch<void>(`/api/v1/leads/${id}`, token, { method: 'DELETE' });
+}
+
+export function deleteAllLeads(token: string | null) {
+  return apiFetch<{ deleted: number }>('/api/v1/leads', token, { method: 'DELETE' });
+}
+
+export function enrichLeads(token: string | null, leadIds: string[]) {
+  return apiFetch<{ enriched: number; unchanged: number }>('/api/v1/leads/enrich', token, {
+    method: 'POST',
+    body: JSON.stringify({ lead_ids: leadIds })
+  });
 }
 
 export function sendLeadEmail(token: string | null, id: string) {

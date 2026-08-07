@@ -12,13 +12,17 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
-  Trash2Icon
+  SparklesIcon,
+  Trash2Icon,
+  WandSparklesIcon
 } from 'lucide-react';
 import { PageHeader } from '../layout/PageHeader';
 import { Button } from '../ui/Button';
 import { useSession } from '../../contexts/SessionContext';
 import {
+  deleteAllLeads,
   deleteLead,
+  enrichLeads,
   exportLeads,
   listLeads,
   sendLeadEmail,
@@ -30,6 +34,7 @@ import { cn } from '../utils/cn';
 import { AddLeadModal } from './AddLeadModal';
 import { EditLeadModal } from './EditLeadModal';
 import { LeadDiscoveryModal } from './LeadDiscoveryModal';
+import { AiLeadFilterModal } from './AiLeadFilterModal';
 import type { LeadStatus } from '../../types';
 
 const STATUS_STYLES: Record<LeadStatus, string> = {
@@ -41,7 +46,7 @@ const STATUS_STYLES: Record<LeadStatus, string> = {
   Lost: 'border-ink-700 text-chalk-faint'
 };
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 20;
 
 export interface LeadCenterConfig {
   tier: 'free' | 'pro' | 'enterprise';
@@ -51,6 +56,7 @@ export interface LeadCenterConfig {
   bulkExportEnabled?: boolean;
   discoveryCap?: number;
   discoveryEnhanced?: boolean;
+  aiFilterEnabled?: boolean;
   onUpgrade?: () => void;
 }
 
@@ -62,6 +68,7 @@ export function LeadCenterPage({
   bulkExportEnabled = false,
   discoveryCap = 50,
   discoveryEnhanced = false,
+  aiFilterEnabled = false,
   onUpgrade
 }: LeadCenterConfig) {
   const { user } = useSession();
@@ -75,9 +82,15 @@ export function LeadCenterPage({
   const [actionError, setActionError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [aiFilterOpen, setAiFilterOpen] = useState(false);
   const [editLead, setEditLead] = useState<LeadDTO | null>(null);
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichSummary, setEnrichSummary] = useState<string | null>(null);
 
   const refresh = useCallback(
     async (search?: string, pageNum = page) => {
@@ -93,6 +106,7 @@ export function LeadCenterPage({
         setLeads(res.items);
         setTotal(res.total);
         setPage(res.page);
+        setSelectedIds(new Set());
       } catch (err) {
         setLoadError(err instanceof ApiError ? err.message : 'Failed to load leads. Please try again.');
       } finally {
@@ -174,6 +188,82 @@ export function LeadCenterPage({
     });
   };
 
+  const toggleSelected = (leadId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllOnPage = () => {
+    setSelectedIds((prev) =>
+      prev.size === leads.length ? new Set() : new Set(leads.map((l) => l.id))
+    );
+  };
+
+  const handleDeleteSelected = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${ids.length} selected lead${ids.length === 1 ? '' : 's'}? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setIsDeletingSelected(true);
+    setActionError(null);
+    try {
+      const token = await getToken();
+      await Promise.all(ids.map((id) => deleteLead(token, id)));
+      setSelectedIds(new Set());
+      await refresh(searchEnabled ? query || undefined : undefined, page);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Failed to delete selected leads. Please try again.');
+    } finally {
+      setIsDeletingSelected(false);
+    }
+  };
+
+  const handleEnrichSelected = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setIsEnriching(true);
+    setActionError(null);
+    setEnrichSummary(null);
+    try {
+      const token = await getToken();
+      const res = await enrichLeads(token, ids);
+      setEnrichSummary(
+        `${res.enriched} lead${res.enriched === 1 ? '' : 's'} got new info, ${res.unchanged} had nothing new found.`
+      );
+      await refresh(searchEnabled ? query || undefined : undefined, page);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Failed to enrich selected leads. Please try again.');
+    } finally {
+      setIsEnriching(false);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (total === 0) return;
+    const confirmed = window.confirm(
+      `Delete all ${total.toLocaleString('en-US')} lead${total === 1 ? '' : 's'} in this workspace? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setIsDeletingAll(true);
+    setActionError(null);
+    try {
+      const token = await getToken();
+      await deleteAllLeads(token);
+      setPage(1);
+      await refresh(undefined, 1);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Failed to delete leads. Please try again.');
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   const handleExport = async () => {
     setIsExporting(true);
     setActionError(null);
@@ -214,10 +304,49 @@ export function LeadCenterPage({
               <CompassIcon className="h-4 w-4" />
               Find leads
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => (aiFilterEnabled ? setAiFilterOpen(true) : onUpgrade?.())}>
+
+              <SparklesIcon className="h-4 w-4" />
+              Filter your leads with AI
+            </Button>
             <Button onClick={() => setAddOpen(true)}>
               <PlusIcon className="h-4 w-4" />
               Add lead
             </Button>
+            {selectedIds.size > 0 &&
+            <Button
+              variant="outline"
+              onClick={() => void handleEnrichSelected()}
+              disabled={isEnriching}>
+
+                <WandSparklesIcon className="h-4 w-4" />
+                {isEnriching ? 'Enriching…' : `Enrich selected (${selectedIds.size})`}
+              </Button>
+            }
+            {selectedIds.size > 0 &&
+            <Button
+              variant="outline"
+              className="border-ember/40 text-ember hover:border-ember hover:bg-ember/10"
+              onClick={() => void handleDeleteSelected()}
+              disabled={isDeletingSelected}>
+
+                <Trash2Icon className="h-4 w-4" />
+                {isDeletingSelected ? 'Deleting…' : `Delete selected (${selectedIds.size})`}
+              </Button>
+            }
+            {total > 0 &&
+            <Button
+              variant="outline"
+              className="border-ember/40 text-ember hover:border-ember hover:bg-ember/10"
+              onClick={() => void handleDeleteAll()}
+              disabled={isDeletingAll}>
+
+                <Trash2Icon className="h-4 w-4" />
+                {isDeletingAll ? 'Deleting…' : 'Delete all'}
+              </Button>
+            }
           </div>
         } />
 
@@ -248,6 +377,12 @@ export function LeadCenterPage({
         </div>
       }
 
+      {enrichSummary &&
+      <div className="mb-4 rounded-2xl border border-signal/40 bg-signal/10 px-5 py-3 text-[13.5px] text-signal">
+          {enrichSummary}
+        </div>
+      }
+
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-[320px]">
           <SearchIcon
@@ -263,7 +398,7 @@ export function LeadCenterPage({
             onChange={(e) => searchEnabled && setQuery(e.target.value)}
             disabled={!searchEnabled}
             title={searchEnabled ? undefined : 'Upgrade to Pro to search leads'}
-            placeholder={searchEnabled ? 'Search name, company or email' : 'Search — upgrade to Pro'}
+            placeholder={searchEnabled ? 'Search name or email' : 'Search — upgrade to Pro'}
             className="h-11 w-full rounded-lg border border-ink-700 bg-ink-900 pl-10 pr-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none disabled:cursor-not-allowed disabled:opacity-55" />
 
         </div>
@@ -273,11 +408,20 @@ export function LeadCenterPage({
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-ink-800 bg-ink-900 scrollbar-slim">
-        <table className="w-full min-w-[1180px] border-collapse text-left">
+        <table className="w-full min-w-[1320px] border-collapse text-left">
           <caption className="sr-only">Leads in this workspace</caption>
           <thead>
             <tr className="border-b border-ink-800">
-              {['Name', 'Email', 'Phone', 'Website', 'Address', 'Score', 'Status', 'Actions'].map((head) =>
+              <th scope="col" className="w-11 px-5 py-3.5">
+                <input
+                  type="checkbox"
+                  aria-label="Select all leads on this page"
+                  checked={leads.length > 0 && selectedIds.size === leads.length}
+                  onChange={toggleSelectAllOnPage}
+                  className="h-3.5 w-3.5 rounded border-ink-600 bg-ink-950 accent-signal" />
+
+              </th>
+              {['Name', 'Industry', 'Email', 'Phone', 'Website', 'Address', 'Score', 'Status', 'Actions'].map((head) =>
               <th
                 key={head}
                 scope="col"
@@ -294,14 +438,14 @@ export function LeadCenterPage({
           <tbody>
             {isLoading &&
             <tr>
-                <td colSpan={8} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                <td colSpan={10} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
                   Loading…
                 </td>
               </tr>
             }
             {!isLoading && !loadError && leads.length === 0 &&
             <tr>
-                <td colSpan={8} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                <td colSpan={10} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
                   {query && searchEnabled ?
                 <>No leads match &ldquo;{query}&rdquo;.</> :
                 'No leads yet — add your first one.'}
@@ -309,14 +453,27 @@ export function LeadCenterPage({
               </tr>
             }
             {!isLoading && !loadError && leads.map((lead) =>
-            <tr key={lead.id} className="border-b border-ink-850 last:border-0 hover:bg-ink-850/60">
+            <tr
+              key={lead.id}
+              onClick={() => setEditLead(lead)}
+              className="cursor-pointer border-b border-ink-850 last:border-0 hover:bg-ink-850/60">
+
+                <td className="px-5 py-4" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${lead.name}`}
+                    checked={selectedIds.has(lead.id)}
+                    onChange={() => toggleSelected(lead.id)}
+                    className="h-3.5 w-3.5 rounded border-ink-600 bg-ink-950 accent-signal" />
+
+                </td>
                 <td className="px-5 py-4">
                   <span className="block text-[14px] font-medium text-chalk">{lead.name}</span>
-                  <span className="block text-[12.5px] text-chalk-faint">{lead.company ?? '—'}</span>
                 </td>
+                <td className="px-5 py-4 text-[13px] text-chalk-dim">{lead.industry ?? '—'}</td>
                 <td className="px-5 py-4 text-[13.5px] text-chalk-dim">{lead.email ?? '—'}</td>
                 <td className="px-5 py-4 font-mono text-[13px] text-chalk-dim">{lead.phone ?? '—'}</td>
-                <td className="max-w-[160px] px-5 py-4 text-[13px] text-chalk-dim">
+                <td className="max-w-[160px] px-5 py-4 text-[13px] text-chalk-dim" onClick={(e) => e.stopPropagation()}>
                   {lead.website ?
                   <a
                     href={lead.website}
@@ -357,7 +514,7 @@ export function LeadCenterPage({
                     {lead.status}
                   </span>
                 </td>
-                <td className="px-5 py-4">
+                <td className="px-5 py-4" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1.5">
                     <IconAction
                     label={`Send email to ${lead.name}`}
@@ -396,7 +553,7 @@ export function LeadCenterPage({
         </table>
       </div>
 
-      {searchEnabled && totalPages > 1 &&
+      {totalPages > 1 &&
       <div className="mt-4 flex items-center justify-between gap-3">
           <p className="font-mono text-[11.5px] text-chalk-faint">
             Page {page} of {totalPages}
@@ -422,7 +579,7 @@ export function LeadCenterPage({
       {tier === 'free' &&
       <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-ink-800 bg-ink-900 p-5 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-[13.5px] text-chalk-dim">
-            Free workspaces show the {pageLimit} most recent leads and cap at {user.workspace.leadQuota} per
+            Free workspaces show {pageLimit} leads per page and cap at {user.workspace.leadQuota} per
             month. Search, bulk actions and WhatsApp unlock on Pro.
           </p>
           <Button size="sm" onClick={onUpgrade}>
@@ -445,8 +602,16 @@ export function LeadCenterPage({
         open={discoverOpen}
         onClose={() => setDiscoverOpen(false)}
         onImported={() => void refresh(searchEnabled ? query || undefined : undefined, page)}
+        onWantManualAdd={() => {
+          setDiscoverOpen(false);
+          setAddOpen(true);
+        }}
         resultCap={discoveryCap}
         enhancedTier={discoveryEnhanced} />
+
+      {aiFilterEnabled &&
+      <AiLeadFilterModal open={aiFilterOpen} onClose={() => setAiFilterOpen(false)} />
+      }
 
     </div>);
 

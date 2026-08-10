@@ -1,4 +1,7 @@
-from app.core.plans import PLAN_LIMITS
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.db.models.plan_config import PlanConfig
 from app.workers.tasks_scoring import score_lead_task
 
 
@@ -54,9 +57,16 @@ async def test_lead_search_filters_by_name_and_email(client_factory, monkeypatch
     assert names == ["Priya Raman"]
 
 
-async def test_lead_quota_enforced_at_403(client_factory, monkeypatch):
+async def test_lead_quota_enforced_at_403(client_factory, db_engine, monkeypatch):
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
-    monkeypatch.setitem(PLAN_LIMITS["free"], "leads", 2)
+
+    # lead_quota is copied onto the workspace row from plan_configs at creation
+    # time, so the seeded "free" limit has to be lowered before the workspace
+    # (and its quota snapshot) gets created below.
+    session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        await session.execute(update(PlanConfig).where(PlanConfig.plan_key == "free").values(lead_quota=2))
+        await session.commit()
 
     async with client_factory("user_quota") as client:
         await client.post("/api/v1/workspaces", json={"name": "Quota Test"})

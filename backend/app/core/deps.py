@@ -4,10 +4,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.plans import PLAN_CAPABILITIES
 from app.core.security import verify_clerk_jwt
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
+from app.services import plan_config_service
 from app.services.workspace_service import get_workspace_for_user
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -33,8 +33,12 @@ async def get_current_workspace(
 
 
 def require_plan(capability: str):
-    def dependency(workspace: Annotated[Workspace, Depends(get_current_workspace)]) -> Workspace:
-        if capability not in PLAN_CAPABILITIES.get(workspace.plan, set()):
+    async def dependency(
+        workspace: Annotated[Workspace, Depends(get_current_workspace)],
+        session: Annotated[AsyncSession, Depends(get_session)],
+    ) -> Workspace:
+        capabilities = await plan_config_service.get_capabilities(session, workspace.plan)
+        if capability not in capabilities:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail=f"'{capability}' requires a higher plan"
             )

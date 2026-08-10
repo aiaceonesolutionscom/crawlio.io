@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""
     clerk_secret_key: str = ""
+    super_admin_emails: list[str] = []
     brevo_api_key: str = ""
     brevo_sender_email: str = "onboarding@crawlio.io"
     brevo_sender_name: str = "Crawlio"

@@ -119,7 +119,15 @@ async def send_gmail_message(access_token: str, to: str, subject: str, body: str
 
 
 async def get_outlook_messages(access_token: str, folder: str = "inbox", top: int = 50) -> list[dict]:
-    folder_path = "inbox" if folder == "inbox" else "sentItems" if folder == "sent" else "deletedItems"
+    folder_path = (
+        "inbox"
+        if folder == "inbox"
+        else "sentItems"
+        if folder == "sent"
+        else "junkemail"
+        if folder == "spam"
+        else "deletedItems"
+    )
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(
             f"https://graph.microsoft.com/v1.0/me/mailFolders/{folder_path}/messages?$top={top}&$orderby=receivedDateTime desc",
@@ -211,6 +219,15 @@ async def sync_trash(session: AsyncSession, account: EmailAccount) -> list[dict]
         return await get_gmail_messages(access_token, "in:trash")
     elif account.provider == "microsoft":
         return await get_outlook_messages(access_token, "trash")
+    return []
+
+
+async def sync_spam(session: AsyncSession, account: EmailAccount) -> list[dict]:
+    access_token = await get_valid_access_token(account)
+    if account.provider == "google":
+        return await get_gmail_messages(access_token, "in:spam")
+    elif account.provider == "microsoft":
+        return await get_outlook_messages(access_token, "spam")
     return []
 
 

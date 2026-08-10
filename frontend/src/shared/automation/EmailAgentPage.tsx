@@ -5,7 +5,7 @@ import {
   ArrowLeftIcon, MailIcon, PlusIcon, Loader2Icon, InboxIcon, SendIcon,
   TrashIcon, UserIcon, MessageCircleIcon, SparklesIcon,
   StopCircleIcon, PlayIcon, CheckIcon, CalendarIcon, DownloadIcon, XIcon,
-  FileTextIcon, SearchIcon
+  FileTextIcon, SearchIcon, ShieldAlertIcon
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import {
@@ -33,10 +33,15 @@ import {
   processInboundReplies,
 } from '../../lib/api/emailAgent';
 import { apiFetch, ApiError } from '../../lib/api/client';
+import { getBusinessProfile, type BusinessProfileDTO } from '../../lib/api/agent';
 import { ComposeDialog } from './ComposeDialog';
 import { WriteWithCrawlioDialog } from './WriteWithCrawlioDialog';
 import { EmailQuotaBar } from './EmailQuotaBar';
 import { RAGAgentPanel } from './RAGAgentPanel';
+import { BusinessOnboarding } from './BusinessOnboarding';
+import { OutreachTab } from './OutreachTab';
+import { CrmTab } from './CrmTab';
+import { ActivityPanel } from './ActivityPanel';
 
 type Step = 'business-info' | 'conversation' | 'preview' | 'booking';
 
@@ -59,6 +64,12 @@ export function EmailAgentPage({ backTo }: Props) {
   const [selectedEmail, setSelectedEmail] = useState<EmailMessageDTO | null>(null);
   const [showAgent, setShowAgent] = useState(false);
   const [emailSearch, setEmailSearch] = useState('');
+
+  // Workspace-wide agent setup (onboarding gate) + top-level views
+  const [pageTab, setPageTab] = useState<'inbox' | 'outreach' | 'crm'>('inbox');
+  const [profile, setProfile] = useState<BusinessProfileDTO | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [showSetup, setShowSetup] = useState(false);
 
   // Conversation state
   const [conversation, setConversation] = useState<EmailConversationDTO | null>(null);
@@ -227,6 +238,22 @@ export function EmailAgentPage({ backTo }: Props) {
   useEffect(() => {
     void fetchAccounts();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = await getToken();
+        const res = await getBusinessProfile(token);
+        if (!cancelled) setProfile(res);
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Failed to load business profile.');
+      } finally {
+        if (!cancelled) setProfileLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [getToken]);
 
   useEffect(() => {
     void fetchQuota();
@@ -605,6 +632,51 @@ export function EmailAgentPage({ backTo }: Props) {
     );
   }
 
+  if (profileLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2Icon className="h-6 w-6 animate-spin text-chalk-faint" />
+      </div>
+    );
+  }
+
+  if (!profile || showSetup) {
+    return (
+      <div className="relative mx-auto w-full max-w-[900px] px-4 py-6">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Link
+              to={backTo}
+              className="flex items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-850 px-2.5 py-1.5 text-[12px] text-chalk-faint hover:border-ink-600 hover:text-chalk"
+            >
+              <ArrowLeftIcon className="h-3.5 w-3.5" />
+              Back
+            </Link>
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-signal">
+              Crawlio Email Agent
+            </span>
+          </div>
+          {profile && (
+            <button
+              onClick={() => setShowSetup(false)}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-850 px-3 text-[12px] text-chalk-dim hover:border-ink-600 hover:text-chalk"
+            >
+              <XIcon className="h-3.5 w-3.5" />
+              Cancel
+            </button>
+          )}
+        </div>
+        <BusinessOnboarding
+          initial={showSetup && profile ? profile : null}
+          onComplete={(p) => {
+            setProfile(p);
+            setShowSetup(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="relative mx-auto w-full max-w-[1460px] min-h-screen">
       {/* Three.js Background */}
@@ -669,7 +741,41 @@ export function EmailAgentPage({ backTo }: Props) {
           </div>
         )}
 
-        <div className="grid grid-cols-[248px_1fr_1.15fr] gap-3" style={{ height: 'calc(100vh - 84px)' }}>
+        {profile && (
+          <div className="mb-3 flex flex-wrap items-center gap-1">
+            {(
+              [
+                { id: 'inbox' as const, label: 'Inbox', icon: InboxIcon },
+                { id: 'outreach' as const, label: 'Outreach', icon: SparklesIcon },
+                { id: 'crm' as const, label: 'CRM', icon: UserIcon },
+              ]
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setPageTab(tab.id)}
+                className={cn(
+                  'flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium',
+                  pageTab === tab.id
+                    ? 'border-signal/50 bg-signal/10 text-signal'
+                    : 'border-ink-700 bg-ink-850 text-chalk-dim hover:border-ink-600 hover:text-chalk'
+                )}
+              >
+                <tab.icon className="h-3.5 w-3.5" />
+                {tab.label}
+              </button>
+            ))}
+            <span className="mx-1 h-4 w-px bg-ink-800" />
+            <button
+              onClick={() => setShowSetup(true)}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-850 px-3 text-[12px] text-chalk-dim hover:border-ink-600 hover:text-chalk"
+            >
+              <SparklesIcon className="h-3.5 w-3.5" />
+              Business Info
+            </button>
+          </div>
+        )}
+
+        {pageTab === 'inbox' && (<div className="grid grid-cols-[248px_1fr_1.15fr] gap-3" style={{ height: 'calc(100vh - 84px)' }}>
           {/* ===== SIDEBAR ===== */}
           <aside className="flex flex-col gap-3 overflow-y-auto rounded-2xl border border-ink-800 bg-ink-900/80 p-3">
             {/* AI actions */}
@@ -706,6 +812,7 @@ export function EmailAgentPage({ backTo }: Props) {
                 { id: 'inbox' as const, label: 'Inbox', icon: InboxIcon },
                 { id: 'sent' as const, label: 'Sent', icon: SendIcon },
                 { id: 'trash' as const, label: 'Trash', icon: TrashIcon },
+                { id: 'spam' as const, label: 'Spam', icon: ShieldAlertIcon },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -781,7 +888,7 @@ export function EmailAgentPage({ backTo }: Props) {
           <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-ink-800 bg-ink-900">
             <header className="flex items-center justify-between border-b border-ink-850 px-3 py-2">
               <span className="text-[11px] font-medium uppercase tracking-wide text-chalk-dim">
-                {activeTab === 'inbox' ? 'Inbox' : activeTab === 'sent' ? 'Sent' : 'Trash'}
+                {activeTab === 'inbox' ? 'Inbox' : activeTab === 'sent' ? 'Sent' : activeTab === 'spam' ? 'Spam' : 'Trash'}
               </span>
               {loadingEmails && <Loader2Icon className="h-3.5 w-3.5 animate-spin text-chalk-faint" />}
             </header>
@@ -792,8 +899,10 @@ export function EmailAgentPage({ backTo }: Props) {
                   <InboxIcon className="mx-auto h-10 w-10 text-ink-700" />
                   <p className="mt-2 text-[12px] text-chalk-dim">
                     {activeTab === 'inbox'
-                      ? 'No emails — new replies auto-trigger the AI agent.'
-                      : activeTab === 'sent' ? 'No sent emails.' : 'Trash is empty.'}
+                    ? 'No emails — new replies auto-trigger the AI agent.'
+                    : activeTab === 'sent' ? 'No sent emails.'
+                    : activeTab === 'spam' ? 'No spam emails.'
+                    : 'Trash is empty.'}
                   </p>
                 </div>
               ) : (
@@ -1067,7 +1176,16 @@ export function EmailAgentPage({ backTo }: Props) {
               </>
             )}
           </section>
-        </div>
+        </div>)}
+
+        {pageTab !== 'inbox' && profile && (
+          <div className="grid grid-cols-[248px_1fr] gap-3" style={{ height: 'calc(100vh - 84px)' }}>
+            <ActivityPanel />
+            <div className="min-h-0 overflow-hidden rounded-2xl border border-ink-800 bg-ink-900">
+              {pageTab === 'outreach' ? <OutreachTab /> : <CrmTab />}
+            </div>
+          </div>
+        )}
 
         <ComposeDialog
           open={composeOpen}

@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import { XIcon, Loader2Icon, MailIcon, PaperclipIcon, ListFilterIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { createEmailDraft, sendEmailDraft, checkAccountQuota, type EmailAccountDTO, type EmailQuotaDTO, type EmailMessageDTO } from '../../lib/api/emailAgent';
-import { apiFetch, ApiError } from '../../lib/api/client';
+import { createEmailDraft, sendEmailDraft, checkAccountQuota, type EmailAccountDTO, type EmailQuotaDTO } from '../../lib/api/emailAgent';
+import { ApiError } from '../../lib/api/client';
+import { SelectCrmLeadsDialog } from './SelectCrmLeadsDialog';
 
 interface Props {
   open: boolean;
@@ -22,8 +23,6 @@ export function ComposeDialog({ open, onClose, selectedAccount }: Props) {
   const [quota, setQuota] = useState<EmailQuotaDTO | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [showCrmLeads, setShowCrmLeads] = useState(false);
-  const [crmLeads, setCrmLeads] = useState<EmailMessageDTO[]>([]);
-  const [selectedCrmLeads, setSelectedCrmLeads] = useState<Set<string>>(new Set());
 
   const fetchQuota = useCallback(async () => {
     if (!selectedAccount) return;
@@ -33,20 +32,6 @@ export function ComposeDialog({ open, onClose, selectedAccount }: Props) {
       setQuota(res);
     } catch {
       console.error('Failed to load quota');
-    }
-  }, [getToken, selectedAccount]);
-
-  const fetchCrmLeads = useCallback(async () => {
-    if (!selectedAccount) return;
-    try {
-      const token = await getToken();
-      const res = await apiFetch<{ items: EmailMessageDTO[] }>(
-        `/api/v1/email-accounts/${selectedAccount.id}/inbox`,
-        token
-      );
-      setCrmLeads(res.items);
-    } catch {
-      console.error('Failed to load CRM leads');
     }
   }, [getToken, selectedAccount]);
 
@@ -70,23 +55,10 @@ export function ComposeDialog({ open, onClose, selectedAccount }: Props) {
     onClose();
   };
 
-  const handleSelectCrmLeads = () => {
-    const selected = Array.from(selectedCrmLeads).map((id) => {
-      const lead = crmLeads.find((l) => l.id === id);
-      return lead?.from_email || '';
-    }).filter(Boolean).join(', ');
-    setRecipients(selected);
+  const handlePickCrmLeads = (leads: { email: string }[]) => {
+    const emails = leads.map((l) => l.email).filter(Boolean).join(', ');
+    setRecipients(emails);
     setShowCrmLeads(false);
-    setSelectedCrmLeads(new Set());
-  };
-
-  const toggleLeadSelection = (leadId: string) => {
-    setSelectedCrmLeads((prev) => {
-      const next = new Set(prev);
-      if (next.has(leadId)) next.delete(leadId);
-      else next.add(leadId);
-      return next;
-    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -203,10 +175,7 @@ export function ComposeDialog({ open, onClose, selectedAccount }: Props) {
                           />
                           <button
                             type="button"
-                            onClick={() => {
-                              setShowCrmLeads(true);
-                              void fetchCrmLeads();
-                            }}
+                            onClick={() => setShowCrmLeads(true)}
                             className="flex h-11 items-center gap-1 rounded-lg border border-ink-700 bg-ink-850 px-3 text-[12px] text-chalk-dim hover:border-ink-600"
                             title="Select from CRM"
                           >
@@ -305,52 +274,12 @@ export function ComposeDialog({ open, onClose, selectedAccount }: Props) {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {showCrmLeads && (
-          <div className="fixed inset-0 z-[70] flex items-end justify-center p-0 sm:items-center sm:p-6">
-            <div className="absolute inset-0 bg-ink-950/85 backdrop-blur-sm" onClick={() => setShowCrmLeads(false)} />
-            <div className="relative flex max-h-[88vh] w-full max-w-[480px] flex-col overflow-hidden rounded-t-2xl border border-ink-700 bg-ink-900 sm:rounded-2xl">
-              <div className="flex items-center justify-between border-b border-ink-850 px-6 py-4">
-                <h3 className="font-display text-[16px] font-semibold text-chalk">Select Leads from CRM</h3>
-                <button onClick={() => setShowCrmLeads(false)} className="rounded-lg p-1 text-chalk-faint hover:bg-ink-850 hover:text-chalk">
-                  <XIcon className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="overflow-y-auto p-4 space-y-2 max-h-96">
-                {crmLeads.map((lead) => (
-                  <div key={lead.id} className="flex items-center gap-2 rounded-lg border border-ink-800 p-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedCrmLeads.has(lead.id)}
-                      onChange={() => toggleLeadSelection(lead.id)}
-                      className="h-3.5 w-3.5 rounded border-ink-600 bg-ink-950 text-signal"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[13px] font-medium text-chalk truncate">{lead.subject || '(No subject)'}</p>
-                      <p className="text-[11px] text-chalk-dim truncate">{lead.from_email}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-end gap-2 border-t border-ink-850 px-4 py-3">
-                <button
-                  onClick={() => setShowCrmLeads(false)}
-                  className="flex h-8 items-center rounded-lg border border-ink-700 bg-ink-850 px-3 text-[12px] text-chalk hover:border-ink-600"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSelectCrmLeads}
-                  disabled={selectedCrmLeads.size === 0}
-                  className="flex h-8 items-center rounded-lg border border-signal/50 bg-signal/10 px-3 text-[12px] text-signal hover:bg-signal/20 disabled:opacity-50"
-                >
-                  Add Selected ({selectedCrmLeads.size})
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
+      <SelectCrmLeadsDialog
+        open={showCrmLeads}
+        onClose={() => setShowCrmLeads(false)}
+        mode="multi"
+        onSelect={handlePickCrmLeads}
+      />
     </>
   );
 }

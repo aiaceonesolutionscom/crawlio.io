@@ -298,18 +298,23 @@ Conversation history so far (oldest to newest):
 The customer's latest reply:
 Customer: {incoming_message}
 
+Available meeting slots (UTC ISO datetimes, choose ONLY from these or suggest one from these):
+{available_slots}
+
 Instructions:
 1. Respond to the customer's latest reply in a natural, helpful tone.
 2. Keep the reply short and professional (2-4 sentences).
-3. If the customer is showing interest in a meeting, confirm the meeting enthusiastically and give a clear proposed date/time.
-4. If the customer says no / not interested, respond politely and end gracefully.
+3. If the customer explicitly asks to unsubscribe / stop emails / opt out, set action to "unsubscribe" and confirm politely and briefly.
+4. If the customer wants a meeting, pick the earliest suitable slot from the available list and confirm it clearly (action "book").
+5. If unsure, action is "reply".
 
 Return JSON format:
 {{
+    "action": "reply" | "unsubscribe" | "book",
     "subject": "email subject line (Re: ...)",
     "body": "reply body in plain text (no HTML)",
     "interested": true/false,
-    "proposed_meeting": "YYYY-MM-DD HH:MM (or null if not proposing a meeting)"
+    "selected_slot": "UTC ISO datetime from the available list (or null)"
 }}"""
 
 
@@ -318,12 +323,15 @@ async def _run_auto_reply_llm(
     history: str,
     incoming_message: str,
     company_name: str = "Crawlio",
+    available_slots: Optional[list[str]] = None,
 ) -> dict:
+    slots_text = "\n".join(f"  {s}" for s in (available_slots or [])) or "  (none available right now)"
     full_prompt = AUTO_REPLY_PROMPT.format(
         company_name=company_name,
         business_context=business_context or "No business context provided.",
         history=history or "(empty)",
         incoming_message=incoming_message,
+        available_slots=slots_text,
     )
 
     payload = {
@@ -361,15 +369,40 @@ def _extract_from_email(raw_from: str) -> str:
     return raw_from.strip()
 
 
+UNSUBSCRIBE_KEYWORDS = (
+    "unsubscribe", "remove me", "stop emailing", "stop emailing me",
+    "don't contact me", "do not contact me", "opt out", "not interested in emails",
+    "stop sending me", "remove me from your list", "take me off",
+)
+
+
+def _is_unsubscribe_message(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(word in lowered for word in UNSUBSCRIBE_KEYWORDS)
+
+
 async def auto_respond_to_conversation(
     session: AsyncSession,
     conversation: EmailConversation,
     incoming_message: str,
 ) -> dict:
     """Generate + send an AI reply for a customer's inbound email, log it in the
-    conversation, and auto-book a meeting + hot-lead the customer if interested."""
-    from app.services import email_sync_service
+    conversation, and auto-book a meeting (from REAL available slots) + hot-lead
+    the customer if interested. Every stage is persisted as AIActivity and
+    pushed to the workspace's WebSocket channel in real time."""
+    from app.services import email_sync_service, meeting_service, agent_realtime
+    from app.services.business_profile_service import get_profile, to_context
     from app.db.models.email_account import EmailAccount
+    from datetime import datetime, timezone
+
+    await agent_realtime.publish_activity(
+        session, conversation.workspace_id, "email_received",
+        conversation_id=conversation.id, detail="New inbound email received",
+    )
+
+    # STOP guard #1: never process a conversation the owner has paused.
+    if not conversation.ai_agent_active or conversation.status != "active":
+        return {"status": "skipped", "reason": "ai_paused"}
 
     account_result = await session.execute(
         select(EmailAccount).where(EmailAccount.id == conversation.email_account_id)
@@ -378,29 +411,90 @@ async def auto_respond_to_conversation(
     if not account:
         raise RuntimeError("Email account not found")
 
-    messages = await get_agent_conversation_history(session, conversation.id)
-    history_lines = [
-        f"{m.sender_type.upper()}: {m.content}" for m in messages
-    ]
-    history = "\n".join(history_lines)
-
-    result = await _run_auto_reply_llm(
-        business_context=conversation.business_context or "",
-        history=history,
-        incoming_message=incoming_message,
-    )
-
-    subject = result.get("subject", f"Re: {conversation.subject}")
-    body = result.get("body", "")
-    interested = bool(result.get("interested"))
-    proposed_meeting = result.get("proposed_meeting") or None
-
     recipient = conversation.customer_email or _extract_from_email(incoming_message)
     if not recipient:
         raise RuntimeError("No customer email to reply to")
 
-    await email_sync_service.send_email_from_account(
-        session, account, recipient, subject, body
+    profile = await get_profile(session, conversation.workspace_id)
+    business_context = conversation.business_context or ""
+    if profile:
+        business_context = f"{to_context(profile, account.email_address)}\n\nAgent notes:\n{business_context}"
+
+    await agent_realtime.publish_activity(
+        session, conversation.workspace_id, "lead_identified",
+        conversation_id=conversation.id, detail=f"Identified lead {recipient}",
+    )
+
+    messages = await get_agent_conversation_history(session, conversation.id)
+    history_lines = [f"{m.sender_type.upper()}: {m.content}" for m in messages]
+    history = "\n".join(history_lines)
+
+    # Real availability: slots derived from business hours + booked meetings.
+    available = []
+    if profile:
+        booked = await meeting_service.list_bookable_meetings(session, conversation.workspace_id)
+        available = meeting_service.next_slots(profile, count=4, bookable=booked)
+    available_text = [s.isoformat() for s in available]
+
+    await agent_realtime.publish_activity(
+        session, conversation.workspace_id, "intent_detected",
+        conversation_id=conversation.id, detail="Reading conversation + intent",
+    )
+
+    if _is_unsubscribe_message(incoming_message):
+        result = {"action": "unsubscribe"}
+
+        await agent_realtime.publish_activity(
+            session, conversation.workspace_id, "unsubscribe_detected",
+            conversation_id=conversation.id, detail="Customer opted out",
+        )
+    else:
+        result = await _run_auto_reply_llm(
+            business_context=business_context,
+            history=history,
+            incoming_message=incoming_message,
+            company_name=profile.business_name if profile else "Crawlio",
+            available_slots=available_text,
+        )
+
+    action = result.get("action") or ("reply" if not _is_unsubscribe_message(incoming_message) else "unsubscribe")
+    subject = result.get("subject", f"Re: {conversation.subject}")
+    if "Re:" not in subject:
+        subject = f"Re: {conversation.subject}"
+    body = result.get("body", "")
+    interested = bool(result.get("interested"))
+
+    # STOP guard #2: only send if the agent is still enabled right now.
+    if not conversation.ai_agent_active or conversation.status != "active":
+        await agent_realtime.publish_activity(
+            session, conversation.workspace_id, "ai_stopped",
+            conversation_id=conversation.id, status="failed", detail="Agent stopped before send",
+        )
+        return {"status": "skipped", "reason": "ai_paused_before_send"}
+
+    if action == "unsubscribe":
+        from app.db.models.lead import Lead
+        from sqlalchemy import or_ as sa_or
+
+        lead_result = await session.execute(
+            select(Lead).where(
+                Lead.workspace_id == conversation.workspace_id,
+                sa_or(Lead.email == recipient, Lead.id == (conversation.lead_id or "")),
+            )
+        )
+        lead = lead_result.scalars().first()
+        if lead is not None:
+            lead.unsubscribed_at = datetime.now(timezone.utc)
+            lead.status = "Unsubscribed"
+            lead.updated_at = datetime.now(timezone.utc)
+        if not body:
+            body = "Understood. You have been removed from our outreach list and will not receive further emails from us."
+
+    await email_sync_service.send_email_from_account(session, account, recipient, subject, body)
+
+    await agent_realtime.publish_activity(
+        session, conversation.workspace_id, "ai_reply_sent",
+        conversation_id=conversation.id, detail="Reply sent to customer",
     )
 
     customer_msg = EmailConversationMessage(
@@ -422,19 +516,49 @@ async def auto_respond_to_conversation(
     session.add(ai_msg)
 
     meeting_booked = False
-    if interested and proposed_meeting:
-        from app.services.email_conversation_service import book_meeting
+    if action == "book" and interested and profile:
+        from app.services.email_conversation_service import book_meeting as crm_book
+        import uuid as _uuid
+        from zoneinfo import ZoneInfo
 
-        booking = await book_meeting(
-            session=session,
-            workspace_id=conversation.workspace_id,
-            conversation_id=conversation.id,
-            lead_name=conversation.customer_name or recipient,
-            lead_email=recipient,
-            lead_company="",
-            meeting_datetime=proposed_meeting,
-        )
-        meeting_booked = bool(booking.get("booking_ref"))
+        selected_slot = result.get("selected_slot")
+        if selected_slot:
+            try:
+                scheduled = datetime.fromisoformat(selected_slot)
+                if scheduled.tzinfo is None:
+                    scheduled = scheduled.replace(tzinfo=ZoneInfo(profile.timezone))
+            except ValueError:
+                scheduled = None
+            # Only ever book a slot that was actually offered.
+            if scheduled and any(abs((s.astimezone(ZoneInfo(profile.timezone)) - scheduled.astimezone(ZoneInfo(profile.timezone))).total_seconds()) < 1800 for s in available):
+                booking = await crm_book(
+                    session=session,
+                    workspace_id=conversation.workspace_id,
+                    conversation_id=conversation.id,
+                    lead_name=conversation.customer_name or recipient,
+                    lead_email=recipient,
+                    lead_company="",
+                    meeting_datetime=scheduled.isoformat(),
+                )
+                await meeting_service.book_meeting(
+                    session=session,
+                    workspace_id=conversation.workspace_id,
+                    lead_id=booking.get("lead_id"),
+                    scheduled_at=scheduled,
+                    conversation_id=conversation.id,
+                    lead_name=conversation.customer_name or recipient,
+                    lead_email=recipient,
+                )
+                meeting_booked = bool(booking.get("booking_ref"))
+                await agent_realtime.publish_activity(
+                    session, conversation.workspace_id, "meeting_booked",
+                    conversation_id=conversation.id,
+                    detail=f"Meeting booked {scheduled.isoformat()} ({booking.get('booking_ref')})",
+                )
+                await agent_realtime.publish_activity(
+                    session, conversation.workspace_id, "crm_updated",
+                    conversation_id=conversation.id, detail="Lead saved to CRM",
+                )
 
     conversation.updated_at = datetime.now(timezone.utc)
     await session.commit()
@@ -442,6 +566,7 @@ async def auto_respond_to_conversation(
     return {
         "status": "replied",
         "reply": body,
+        "action": action,
         "interested": interested,
         "meeting_booked": meeting_booked,
     }

@@ -1,10 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckIcon, GlobeIcon, Loader2Icon, SparklesIcon, XIcon } from 'lucide-react';
+import { CheckIcon, GlobeIcon, Loader2Icon, SparklesIcon, WandSparklesIcon, XIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { cn } from '../utils/cn';
-import { aiFilterLeads, addToCrm, type AiFilterResponseDTO } from '../../lib/api/crm';
+import {
+  aiFilterEnrichLeads,
+  aiFilterLeads,
+  addToCrm,
+  type AiFilterResponseDTO
+} from '../../lib/api/crm';
 import type { LeadDTO } from '../../lib/api/leads';
 import { ApiError } from '../../lib/api/client';
 
@@ -21,11 +26,14 @@ export function AiLeadFilterModal({ open, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isAdding, setIsAdding] = useState(false);
   const [addSummary, setAddSummary] = useState<string | null>(null);
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichSummary, setEnrichSummary] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setError(null);
     setAddSummary(null);
+    setEnrichSummary(null);
     setIsLoading(true);
     (async () => {
       try {
@@ -45,6 +53,7 @@ export function AiLeadFilterModal({ open, onClose }: Props) {
     setData(null);
     setSelected(new Set());
     setAddSummary(null);
+    setEnrichSummary(null);
     onClose();
   };
 
@@ -73,6 +82,25 @@ export function AiLeadFilterModal({ open, onClose }: Props) {
       setError(err instanceof ApiError ? err.message : 'Could not add to CRM. Please try again.');
     } finally {
       setIsAdding(false);
+    }
+  };
+
+  const handleEnrichSelected = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    setIsEnriching(true);
+    setError(null);
+    setEnrichSummary(null);
+    try {
+      const token = await getToken();
+      const res = await aiFilterEnrichLeads(token, ids);
+      setEnrichSummary(
+        `${res.dispatched} lead${res.dispatched === 1 ? '' : 's'} queued for enrichment in the background — updated details appear on refresh.`
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not start enrichment. Please try again.');
+    } finally {
+      setIsEnriching(false);
     }
   };
 
@@ -215,6 +243,12 @@ export function AiLeadFilterModal({ open, onClose }: Props) {
                 </p>
               )}
 
+              {enrichSummary && (
+                <p className="rounded-lg border border-signal/40 bg-signal/10 px-3.5 py-2.5 text-[13px] text-signal">
+                  {enrichSummary}
+                </p>
+              )}
+
               {!isLoading && data && (
                 <div className="flex flex-col gap-4 sm:flex-row">
                   {renderColumn('Has a website', data.with_website, 'No leads with a website yet.', true)}
@@ -228,6 +262,16 @@ export function AiLeadFilterModal({ open, onClose }: Props) {
               <div className="flex gap-2">
                 <Button type="button" variant="outline" onClick={handleClose}>
                   Close
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={selected.size === 0 || isEnriching}
+                  onClick={() => void handleEnrichSelected()}
+                >
+                  {isEnriching && <Loader2Icon className="h-4 w-4 animate-spin" />}
+                  <WandSparklesIcon className="h-4 w-4" />
+                  {isEnriching ? 'Enriching…' : 'Enrich selected'}
                 </Button>
                 <Button type="button" disabled={selected.size === 0 || isAdding} onClick={() => void handleAddToCrm()}>
                   {isAdding && <Loader2Icon className="h-4 w-4 animate-spin" />}

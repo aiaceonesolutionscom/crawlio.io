@@ -6,15 +6,27 @@ import httpx
 from app.core.config import settings
 
 SCORING_PROMPT = (
-    "You are a B2B lead qualification assistant. Given a lead's name, company, email, and "
-    "source, return a JSON object with exactly two fields: \"score\" (integer 0-100, how "
-    "likely this lead is to convert) and \"status\" (one of \"New\", \"Qualified\", "
-    "\"Contacted\", \"Nurturing\", \"Won\", \"Lost\" -- pick \"Qualified\" if score >= 70, "
-    "otherwise \"New\"). Respond with ONLY the JSON object, no other text."
+    "You are a B2B lead qualification assistant. Given a lead's name, company, email, source, "
+    "website, social presence, and data completeness, return a JSON object with exactly two "
+    "fields: \"score\" (integer 0-100, how likely this lead is to convert) and \"status\" "
+    "(one of \"New\", \"Qualified\", \"Contacted\", \"Nurturing\", \"Won\", \"Lost\" -- pick "
+    "\"Qualified\" if score >= 70, otherwise \"New\"). "
+    "Score higher when the lead has an official website, active social profiles, and a "
+    "complete contact record (all signs it is a real, active business); score lower when "
+    "there is only a name or only partial contact data. "
+    "Respond with ONLY the JSON object, no other text."
 )
 
 
-async def score_lead(name: str, company: Optional[str], email: Optional[str], source: Optional[str]) -> dict:
+async def score_lead(
+    name: str,
+    company: Optional[str],
+    email: Optional[str],
+    source: Optional[str],
+    website: Optional[str] = None,
+    social_presence: int = 0,
+    completeness: Optional[int] = None,
+) -> dict:
     if not settings.mistral_api_key:
         raise RuntimeError("MISTRAL_API_KEY is not configured")
 
@@ -26,7 +38,10 @@ async def score_lead(name: str, company: Optional[str], email: Optional[str], so
                 "role": "user",
                 "content": (
                     f"Name: {name}\nCompany: {company or 'unknown'}\n"
-                    f"Email: {email or 'unknown'}\nSource: {source or 'unknown'}"
+                    f"Email: {email or 'unknown'}\nSource: {source or 'unknown'}\n"
+                    f"Website: {website or 'none'}\n"
+                    f"Social profiles count: {social_presence}\n"
+                    f"Data completeness: {completeness if completeness is not None else 'unknown'}/100"
                 )
             }],
 

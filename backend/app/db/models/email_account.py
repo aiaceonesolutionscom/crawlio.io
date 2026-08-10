@@ -53,6 +53,9 @@ class EmailConversation(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     ai_agent_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     business_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    customer_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    customer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    last_processed_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

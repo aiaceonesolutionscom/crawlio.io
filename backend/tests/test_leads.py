@@ -160,7 +160,7 @@ async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch)
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
 
-    async def fake_extract(url):
+    async def fake_extract(url, country_code=None):
         return {"email": "found@example.com", "phone": "+15551234567", "social_links": {"facebook": "https://facebook.com/x"}}
 
     monkeypatch.setattr(website_scraper_service, "extract_contact_from_website", fake_extract)
@@ -189,7 +189,7 @@ async def test_enrich_leads_does_not_overwrite_existing_data(client_factory, mon
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
 
-    async def fake_extract(url):
+    async def fake_extract(url, country_code=None):
         return {"email": "scraped@example.com", "phone": "+15559999999"}
 
     monkeypatch.setattr(website_scraper_service, "extract_contact_from_website", fake_extract)

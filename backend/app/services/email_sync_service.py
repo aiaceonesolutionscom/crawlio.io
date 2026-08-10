@@ -8,6 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.models.email_account import EmailAccount
+from app.services import email_account_service
+
+
+async def get_valid_access_token(account: EmailAccount) -> str:
+    """Get a valid access token, refreshing if expired."""
+    if account.token_expires_at:
+        expiry = account.token_expires_at
+        now = datetime.now(timezone.utc)
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry > now:
+            return account.access_token
+
+    if account.provider == "google":
+        return await email_account_service.refresh_google_token(account)
+    elif account.provider == "microsoft":
+        return await email_account_service.refresh_microsoft_token(account)
+    return account.access_token
 
 
 async def get_gmail_messages(access_token: str, query: str = "in:inbox", max_results: int = 50) -> list[dict]:
@@ -170,42 +188,47 @@ async def send_outlook_message(access_token: str, to: str, subject: str, body: s
 
 
 async def sync_inbox(session: AsyncSession, account: EmailAccount) -> list[dict]:
+    access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(account.access_token, "in:inbox")
+        return await get_gmail_messages(access_token, "in:inbox")
     elif account.provider == "microsoft":
-        return await get_outlook_messages(account.access_token, "inbox")
+        return await get_outlook_messages(access_token, "inbox")
     return []
 
 
 async def sync_sent(session: AsyncSession, account: EmailAccount) -> list[dict]:
+    access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(account.access_token, "in:sent")
+        return await get_gmail_messages(access_token, "in:sent")
     elif account.provider == "microsoft":
-        return await get_outlook_messages(account.access_token, "sent")
+        return await get_outlook_messages(access_token, "sent")
     return []
 
 
 async def sync_trash(session: AsyncSession, account: EmailAccount) -> list[dict]:
+    access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(account.access_token, "in:trash")
+        return await get_gmail_messages(access_token, "in:trash")
     elif account.provider == "microsoft":
-        return await get_outlook_messages(account.access_token, "trash")
+        return await get_outlook_messages(access_token, "trash")
     return []
 
 
 async def get_email_detail(session: AsyncSession, account: EmailAccount, message_id: str) -> dict:
+    access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_message_detail(account.access_token, message_id)
+        return await get_gmail_message_detail(access_token, message_id)
     elif account.provider == "microsoft":
-        return await get_outlook_message_detail(account.access_token, message_id)
+        return await get_outlook_message_detail(access_token, message_id)
     return {}
 
 
 async def send_email_from_account(
     session: AsyncSession, account: EmailAccount, to: str, subject: str, body: str
 ) -> dict:
+    access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await send_gmail_message(account.access_token, to, subject, body)
+        return await send_gmail_message(access_token, to, subject, body)
     elif account.provider == "microsoft":
-        return await send_outlook_message(account.access_token, to, subject, body)
+        return await send_outlook_message(access_token, to, subject, body)
     return {"status": "unsupported"}

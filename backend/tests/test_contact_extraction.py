@@ -61,3 +61,56 @@ def test_is_own_website_rejects_map_and_directory_domains():
 
 def test_is_own_website_accepts_business_domain():
     assert ce.is_own_website("https://brightsmile.pk") is True
+
+
+def test_best_email_prefers_domain_matching_website():
+    """The page's first email is the theme author's boilerplate; the business's
+    own address appears later. best_email must pick the one matching the site's
+    domain, not the first match."""
+    html = (
+        "Powered by <a href=\"mailto:info@wixpress.com\">Wix</a>. "
+        "Contact us: <a href=\"mailto:bookings@brightsmile.pk\">bookings</a> or info@brightsmile.pk."
+    )
+    assert ce.best_email(html, website="https://brightsmile.pk") == "bookings@brightsmile.pk"
+
+
+def test_best_email_rejects_boilerplate_over_real():
+    html = "No-reply <a href=\"mailto:noreply@brightsmile.pk\">mailer</a> — real: hello@brightsmile.pk"
+    assert ce.best_email(html, website="https://brightsmile.pk") == "hello@brightsmile.pk"
+
+
+def test_best_email_rejects_disposable_and_placeholder():
+    html = "Call yourname@yopmail.com or test@example.com for demos. Real: sales@acme.com"
+    assert ce.best_email(html) == "sales@acme.com"
+
+
+def test_decode_cfemail_recovers_obfuscated_address():
+    """Cloudflare encodes hello@brightsmile.pk by XORing each byte against the first
+    byte of the blob; the decoder must recover the original address."""
+    raw = "hello@brightsmile.pk"
+    data = bytes([0x5A]) + bytes(b ^ 0x5A for b in raw.encode())
+    html = f'<a data-cfemail="{data.hex()}">email</a>'
+    assert ce.decode_cfemail(html) == ["hello@brightsmile.pk"]
+
+
+def test_best_phone_country_mismatch_penalized():
+    """A PK lead whose number has a US +1 dial code is deprioritized behind a
+    properly-formatted +92 number."""
+    html = "Cell: +1 202 555 0111. Office: +92 21 111 111 001."
+    assert ce.best_phone(html, country_code="PK") == "+92 21 111 111 001"
+
+
+def test_best_phone_rejects_fake_patterns():
+    assert ce.best_phone("Call 555-555-5555 now!") is None
+    assert ce.best_phone("Number is 123456789") is None  # bare digit run
+
+
+def test_collect_emails_decodes_entity_obfuscation():
+    html = 'Email us at hello&#64;brightsmile.pk or a&#64;b.com'
+    emails = ce.collect_emails(html)
+    assert "hello@brightsmile.pk" in emails
+
+
+def test_first_valid_email_entity_aware():
+    html = 'Contact: sales&#64;acme.pk'
+    assert ce.first_valid_email(html) == "sales@acme.pk"

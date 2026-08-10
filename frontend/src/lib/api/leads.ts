@@ -15,6 +15,12 @@ export interface LeadDTO {
   source: string | null;
   scoring_failed: boolean;
   social_links: Record<string, string>;
+  completeness: number | null;
+  enrichment_status: string | null;
+  enrichment_source: string | null;
+  last_enriched_at: string | null;
+  description: string | null;
+  hours: string | null;
   created_at: string;
   updated_at: string;
 }

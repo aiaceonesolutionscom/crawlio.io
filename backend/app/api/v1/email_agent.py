@@ -31,8 +31,27 @@ async def initialize_agent(
         email_account_id=input.email_account_id,
         lead_id=input.lead_id,
         subject=input.subject,
+        lead_name=input.lead_name,
+        lead_email=input.lead_email,
     )
     return EmailConversationRead.model_validate(conversation)
+
+
+@router.post("/process-inbound/{account_id}")
+async def process_inbound(
+    account_id: str,
+    workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
+    session: AsyncSession = Depends(get_session),
+):
+    """Sync-based auto-agent: fetch inbox and auto-respond to any new customer
+    replies on active AI conversations. Called after an inbox refresh."""
+    try:
+        result = await email_ai_service.process_inbound_replies_for_account(
+            session, account_id
+        )
+        return result
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.post("/message")

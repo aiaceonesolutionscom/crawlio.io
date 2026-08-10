@@ -6,7 +6,7 @@ class Settings(BaseSettings):
 
     env: str = "development"
     database_url: str = "postgresql+asyncpg://crawlio:crawlio@localhost:5432/crawlio"
-    cors_origins: list[str] = ["http://localhost:5173"]
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:5174"]
 
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""

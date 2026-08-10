@@ -29,3 +29,12 @@ class CrmEntryRead(BaseModel):
 class CrmEntryListResponse(BaseModel):
     items: list[CrmEntryRead]
     total: int
+
+
+class CrmImportFromConversationRequest(BaseModel):
+    conversation_id: str
+    lead_name: str
+    lead_email: str
+    lead_company: str = ""
+    subject: str = ""
+    messages: list[dict]

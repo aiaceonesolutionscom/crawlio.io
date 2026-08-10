@@ -85,6 +85,8 @@ class EmailConversationRead(BaseModel):
     status: str
     ai_agent_active: bool
     business_context: Optional[str] = None
+    customer_email: Optional[str] = None
+    customer_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -105,6 +107,11 @@ class EmailAgentInitializeRequest(BaseModel):
     email_account_id: str
     lead_id: Optional[str] = None
     subject: str = "Outreach Conversation"
+    lead_name: Optional[str] = None
+    lead_email: Optional[str] = None
+    business_name: Optional[str] = None
+    business_subject: Optional[str] = None
+    business_additional_info: Optional[str] = None
 
 
 class EmailAgentMessageRequest(BaseModel):
@@ -121,6 +128,36 @@ class EmailAIGenerateRequest(BaseModel):
     lead_email: str = ""
 
 
+class ConversationStartRequest(BaseModel):
+    email_account_id: str
+    email_id: str
+    lead_name: str = ""
+    lead_email: str = ""
+
+
+class ConversationMessageRequest(BaseModel):
+    conversation_id: str
+    message: str
+    sender_type: str = "user"
+
+
+class BookingRequest(BaseModel):
+    email_account_id: str
+    conversation_id: Optional[str] = None
+    lead_name: str
+    lead_email: str
+    lead_company: str = ""
+    meeting_datetime: str
+
+
+class BusinessInfoRequest(BaseModel):
+    email_account_id: str
+    conversation_id: str
+    business_name: str
+    business_subject: str
+    business_additional_info: str = ""
+
+
 class EmailMessageRead(BaseModel):
     id: str
     thread_id: Optional[str] = None
@@ -133,6 +170,8 @@ class EmailMessageRead(BaseModel):
     snippet: str = ""
     label_ids: list[str] = []
     is_read: bool = True
+    has_conversation: bool = False
+    is_customer_interested: bool = False
 
     class Config:
         populate_by_name = True
@@ -147,3 +186,17 @@ class EmailMessageRead(BaseModel):
 
 class EmailMessageListResponse(BaseModel):
     items: list[EmailMessageRead]
+
+
+class CSVExportResponse(BaseModel):
+    csv: str
+
+
+class ConversationListResponse(BaseModel):
+    items: list[EmailConversationRead]
+
+
+class ConversationWithMessages(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    conversation: EmailConversationRead
+    messages: list[EmailConversationMessageRead]

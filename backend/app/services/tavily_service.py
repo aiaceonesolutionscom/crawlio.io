@@ -21,7 +21,9 @@ _SOCIAL_DOMAINS = {
 }
 
 
-async def search(query: str, max_results: int = 5) -> list[dict]:
+async def search(
+    query: str, max_results: int = 5, include_raw_content: bool = False, include_answer: bool = False
+) -> list[dict]:
     if not settings.tavily_api_key:
         raise RuntimeError("TAVILY_API_KEY is not configured")
 
@@ -34,7 +36,11 @@ async def search(query: str, max_results: int = 5) -> list[dict]:
         "search_depth": "advanced",
         "max_results": max_results,
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    if include_raw_content:
+        payload["include_raw_content"] = True
+    if include_answer:
+        payload["include_answer"] = True
+    async with httpx.AsyncClient(timeout=25.0) as client:
         resp = await client.post(TAVILY_URL, json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -142,3 +148,51 @@ async def find_website_url(business_name: str, city: str, country: str) -> Optio
         if _domain_matches_business(business_name, url):
             return url
     return None
+
+
+async def enrich_business(business_name: str, city: str, country: str, max_results: int = 8) -> list[dict]:
+    """Search the open web for a business's contact/profile data — email, phone,
+    address, socials — when its own website is missing or incomplete. Returns the
+    raw (relevance-filtered) results; the caller folds them into one blob and
+    lets the AI extraction service pick the real contact out. This is the primary
+    enrichment source for leads that have no website at all."""
+    if not settings.tavily_api_key:
+        return []
+    try:
+        results = await search(
+            f'"{business_name}" {city} {country} contact email phone address phone number',
+            max_results=max_results,
+            include_raw_content=True,
+            include_answer=True,
+        )
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.warning("Tavily business enrichment failed for %s: %s", business_name, exc)
+        return []
+    return [r for r in results if _is_relevant(business_name, city, r)]
+
+
+async def find_social_links(business_name: str, city: str, country: str = "") -> dict[str, str]:
+    """Find a business's social profiles when its own website didn't surface any
+    (or there's no website to scrape). One combined search keeps per-lead cost
+    predictable; each result is relevance-checked against the business name and
+    city so a namesake in another city isn't attributed to this lead."""
+    if not settings.tavily_api_key:
+        return {}
+    query = f'"{business_name}" {city} {country} instagram facebook linkedin profile official page'
+    try:
+        results = await search(query, max_results=8)
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.warning("Tavily social lookup failed for %s: %s", business_name, exc)
+        return {}
+
+    socials: dict[str, str] = {}
+    for result in results:
+        url = result.get("url", "")
+        platform = _social_platform_for_url(url)
+        if not platform or platform in socials:
+            continue
+        if _is_relevant(business_name, city, result):
+            socials[platform] = url
+        if len(socials) >= 4:
+            break
+    return socials

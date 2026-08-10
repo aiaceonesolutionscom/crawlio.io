@@ -26,7 +26,7 @@ async def test_score_lead_async_updates_lead(db_engine, monkeypatch):
         )
         lead_id = lead.id
 
-    async def fake_score_lead(name, company, email, source):
+    async def fake_score_lead(name, company, email, source, **kwargs):
         return {"score": 91, "status": "Qualified"}
 
     monkeypatch.setattr(tasks_scoring.scoring_service, "score_lead", fake_score_lead)

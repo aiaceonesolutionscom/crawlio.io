@@ -1,16 +1,10 @@
 import logging
 from typing import Optional
 
-import httpx
-
+from app.data.cities import CITIES
 from app.data.countries import COUNTRIES
 
 logger = logging.getLogger(__name__)
-
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-# Nominatim's usage policy requires a descriptive User-Agent and no more than ~1 req/s;
-# we're a single backend proxying user-triggered autocomplete, not bulk scraping.
-NOMINATIM_HEADERS = {"User-Agent": "crawlio-lead-discovery/1.0 (contact: support@crawlio.io)"}
 
 
 def search_countries(query: Optional[str], limit: int = 20) -> list[dict[str, str]]:
@@ -33,41 +27,20 @@ def country_name_for_code(code: str) -> Optional[str]:
     return None
 
 
-async def search_cities(country_code: str, query: str, limit: int = 8) -> list[dict]:
-    country_name = country_name_for_code(country_code)
-    if not country_name or not query or len(query.strip()) < 2:
+def search_cities(country_code: str, query: str, limit: int = 8) -> list[dict]:
+    """City autocomplete from a static major-city list — no geocoding service.
+    Coordinates are approximate (kept only for the API shape; discovery is
+    web-based and ignores them). If the country or city isn't in the list, the
+    typed query is passed through as a free-text city so any location still
+    works for a web search."""
+    q = (query or "").strip()
+    if len(q) < 2:
         return []
 
-    params = {
-        "city": query.strip(),
-        "country": country_name,
-        "format": "jsonv2",
-        "addressdetails": "1",
-        "limit": str(limit),
-        # Without this, Nominatim returns names in the local script (e.g. "کراچی"
-        # for Karachi) based on the region rather than English.
-        "accept-language": "en",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=8.0, headers=NOMINATIM_HEADERS) as client:
-            resp = await client.get(NOMINATIM_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-    except (httpx.HTTPError, ValueError):
-        logger.warning("Nominatim city search failed for %s/%s", country_code, query)
-        return []
-
-    results = []
-    seen_names = set()
-    for item in data:
-        address = item.get("address", {})
-        name = address.get("city") or address.get("town") or address.get("village") or item.get("name")
-        if not name or name in seen_names:
-            continue
-        seen_names.add(name)
-        try:
-            lat, lon = float(item["lat"]), float(item["lon"])
-        except (KeyError, ValueError):
-            continue
-        results.append({"name": name, "lat": lat, "lon": lon})
-    return results
+    city_list = CITIES.get(country_code.upper(), [])
+    matches = [c for c in city_list if c["name"].lower().startswith(q.lower())]
+    if not matches:
+        matches = [c for c in city_list if q.lower() in c["name"].lower()]
+    if matches:
+        return matches[:limit]
+    return [{"name": q, "lat": 0.0, "lon": 0.0}]

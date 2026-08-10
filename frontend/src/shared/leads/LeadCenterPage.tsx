@@ -421,7 +421,7 @@ export function LeadCenterPage({
                   className="h-3.5 w-3.5 rounded border-ink-600 bg-ink-950 accent-signal" />
 
               </th>
-              {['Name', 'Industry', 'Email', 'Phone', 'Website', 'Address', 'Score', 'Status', 'Actions'].map((head) =>
+              {['Name', 'Industry', 'Email', 'Phone', 'Website', 'Address', 'Completeness', 'Score', 'Status', 'Actions'].map((head) =>
               <th
                 key={head}
                 scope="col"
@@ -438,14 +438,14 @@ export function LeadCenterPage({
           <tbody>
             {isLoading &&
             <tr>
-                <td colSpan={10} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                <td colSpan={11} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
                   Loading…
                 </td>
               </tr>
             }
             {!isLoading && !loadError && leads.length === 0 &&
             <tr>
-                <td colSpan={10} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
+                <td colSpan={11} className="px-5 py-14 text-center text-[14px] text-chalk-dim">
                   {query && searchEnabled ?
                 <>No leads match &ldquo;{query}&rdquo;.</> :
                 'No leads yet — add your first one.'}
@@ -486,6 +486,23 @@ export function LeadCenterPage({
                 </td>
                 <td className="max-w-[180px] truncate px-5 py-4 text-[13px] text-chalk-dim">
                   {lead.address ?? '—'}
+                </td>
+                <td className="px-5 py-4">
+                  {lead.completeness !== null ?
+                  <span className="flex items-center gap-2">
+                      <span className="h-1.5 w-12 overflow-hidden rounded-full bg-ink-800" aria-hidden="true">
+                        <span
+                      className={cn('block h-full rounded-full', lead.completeness >= 70 ? 'bg-signal' : 'bg-ink-600')}
+                      style={{ width: `${lead.completeness}%` }} />
+
+                      </span>
+                      <span className="font-mono text-[13px] text-chalk">{lead.completeness}</span>
+                    </span> :
+                  <span className="font-mono text-[12px] text-chalk-faint">—</span>
+                  }
+                  {lead.enrichment_status === 'failed' &&
+                  <span className="ml-2 font-mono text-[11px] text-ember" title="Enrichment failed">failed</span>
+                  }
                 </td>
                 <td className="px-5 py-4">
                   {lead.scoring_failed ?

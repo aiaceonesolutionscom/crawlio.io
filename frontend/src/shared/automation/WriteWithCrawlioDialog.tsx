@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@clerk/clerk-react';
-import { XIcon, Loader2Icon, SparklesIcon, CheckIcon } from 'lucide-react';
+import { XIcon, Loader2Icon, SparklesIcon, CheckIcon, UserIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { generateAIEmail, approveAIEmail, type EmailAccountDTO, type EmailDraftDTO } from '../../lib/api/emailAgent';
+import { generateAIEmail, approveAIEmail, checkAccountQuota, type EmailAccountDTO, type EmailDraftDTO, type EmailQuotaDTO } from '../../lib/api/emailAgent';
 import { ApiError } from '../../lib/api/client';
 
 interface Props {
@@ -22,6 +22,24 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
   const [generatedDraft, setGeneratedDraft] = useState<EmailDraftDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [quota, setQuota] = useState<EmailQuotaDTO | null>(null);
+
+  const fetchQuota = useCallback(async () => {
+    if (!selectedAccount) return;
+    try {
+      const token = await getToken();
+      const res = await checkAccountQuota(token, selectedAccount.id);
+      setQuota(res);
+    } catch {
+      console.error('Failed to load quota');
+    }
+  }, [getToken, selectedAccount]);
+
+  useEffect(() => {
+    if (open && selectedAccount) {
+      void fetchQuota();
+    }
+  }, [open, selectedAccount]);
 
   const reset = () => {
     setPrompt('');
@@ -115,6 +133,23 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
 
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5 scrollbar-slim">
+                {quota && (
+                  <div className="rounded-lg border border-ink-800 bg-ink-850 p-2.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-chalk-dim">Daily Limit</span>
+                      <span className="font-mono text-chalk-faint">
+                        {quota.total_sent}/{quota.limit}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-ink-800">
+                      <div
+                        className="h-full rounded-full bg-signal"
+                        style={{ width: `${Math.min(100, (quota.total_sent / quota.limit) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {success ? (
                   <div className="rounded-lg border border-signal/40 bg-signal/10 px-3.5 py-2.5 text-[13px] text-signal">
                     AI email sent successfully!
@@ -211,6 +246,17 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
                         {error}
                       </p>
                     )}
+
+                    <button
+                      onClick={() => {
+                        window.open('/crm', '_blank');
+                      }}
+                      className="flex h-9 items-center gap-2 rounded-lg border border-ink-700 bg-ink-850 px-3 text-[13px] text-chalk-dim hover:border-ink-600"
+                      title="Select from CRM"
+                    >
+                      <UserIcon className="h-4 w-4" />
+                      Select lead from CRM
+                    </button>
                   </div>
                 )}
               </div>
@@ -226,7 +272,7 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
                 {!generatedDraft && !success && (
                   <button
                     onClick={handleGenerate}
-                    disabled={isGenerating || !prompt}
+                    disabled={isGenerating || !prompt || (quota ? quota.remaining <= 0 : false)}
                     className="flex h-9 items-center gap-2 rounded-lg border border-signal/50 bg-signal/10 px-4 text-[13px] text-signal hover:bg-signal/20 disabled:opacity-50"
                   >
                     {isGenerating ? (
@@ -236,6 +282,12 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
                     )}
                     {isGenerating ? 'Generating...' : 'Generate with AI'}
                   </button>
+                )}
+
+                {quota && quota.remaining <= 0 && (
+                  <p className="text-[11px] text-ember">
+                    Daily limit reached! You can send {quota.limit} emails per day.
+                  </p>
                 )}
               </div>
             </div>

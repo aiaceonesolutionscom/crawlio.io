@@ -39,7 +39,15 @@ async def _score_lead_async(lead_id: str) -> None:
         if lead is None:
             return
 
-        outcome = await scoring_service.score_lead(lead.name, lead.company, lead.email, lead.source)
+        outcome = await scoring_service.score_lead(
+            lead.name,
+            lead.company,
+            lead.email,
+            lead.source,
+            website=lead.website,
+            social_presence=len((lead.lead_metadata or {}).get("social_links") or {}),
+            completeness=(lead.lead_metadata or {}).get("completeness"),
+        )
         await lead_service.apply_score(session, lead_id, outcome["score"], outcome["status"])
 
 

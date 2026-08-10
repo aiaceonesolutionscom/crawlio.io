@@ -10,6 +10,17 @@ export function aiFilterLeads(token: string | null) {
   return apiFetch<AiFilterResponseDTO>('/api/v1/leads/ai-filter', token);
 }
 
+export interface AiFilterEnrichResultDTO {
+  dispatched: number;
+}
+
+export function aiFilterEnrichLeads(token: string | null, leadIds: string[]) {
+  return apiFetch<AiFilterEnrichResultDTO>('/api/v1/leads/ai-filter/enrich', token, {
+    method: 'POST',
+    body: JSON.stringify({ lead_ids: leadIds })
+  });
+}
+
 export interface CrmAddResultDTO {
   added: number;
   skipped: number;

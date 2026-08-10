@@ -55,10 +55,14 @@ export interface EmailConversationDTO {
   workspace_id: string;
   email_account_id: string;
   lead_id: string | null;
+  lead_name?: string;
+  lead_email?: string;
   subject: string;
   status: string;
   ai_agent_active: boolean;
   business_context: string | null;
+  customer_email?: string | null;
+  customer_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +89,8 @@ export interface EmailMessageDTO {
   snippet: string;
   label_ids: string[];
   is_read: boolean;
+  is_customer_interested?: boolean;
+  has_conversation?: boolean;
 }
 
 export interface EmailMessageListResponseDTO {
@@ -175,6 +181,8 @@ export function initializeAgent(token: string | null, input: {
   email_account_id: string;
   lead_id?: string;
   subject?: string;
+  lead_name?: string;
+  lead_email?: string;
 }) {
   return apiFetch<EmailConversationDTO>('/api/v1/email-agent/initialize', token, {
     method: 'POST',
@@ -218,4 +226,133 @@ export function resumeAgent(token: string | null, conversationId: string) {
   return apiFetch<{ status: string }>(`/api/v1/email-agent/resume/${conversationId}`, token, {
     method: 'POST',
   });
+}
+
+export function processInboundReplies(token: string | null, accountId: string) {
+  return apiFetch<{ processed: number; results: { conversation_id: string; result: any }[] }>(
+    `/api/v1/email-agent/process-inbound/${accountId}`, token, {
+      method: 'POST',
+    }
+  );
+}
+
+export interface ConversationStartRequest {
+  email_account_id: string;
+  email_id: string;
+  lead_name?: string;
+  lead_email?: string;
+}
+
+export interface ConversationMessageRequest {
+  conversation_id: string;
+  message: string;
+  sender_type?: 'user' | 'ai' | 'system';
+}
+
+export interface BookingRequest {
+  email_account_id: string;
+  conversation_id?: string;
+  lead_name: string;
+  lead_email: string;
+  lead_company?: string;
+  meeting_datetime: string;
+}
+
+export interface BusinessInfoRequest {
+  business_name: string;
+  business_subject: string;
+  business_additional_info?: string;
+}
+
+export interface ConversationWithMessages {
+  conversation: {
+    id: string;
+    workspace_id: string;
+    email_account_id: string;
+    lead_id: string | null;
+    subject: string;
+    status: string;
+    ai_agent_active: boolean;
+    business_context: string | null;
+    customer_email?: string | null;
+    customer_name?: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+  messages: EmailConversationMessageDTO[];
+}
+
+export interface ConversationListResponse {
+  items: EmailConversationDTO[];
+}
+
+export function startConversation(token: string | null, input: ConversationStartRequest) {
+  return apiFetch<EmailConversationDTO>('/api/v1/email-conversations/start', token, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function sendConversationMessage(token: string | null, input: ConversationMessageRequest) {
+  return apiFetch<EmailConversationMessageDTO>(`/api/v1/email-conversations/${input.conversation_id}/messages`, token, {
+    method: 'POST',
+    body: JSON.stringify({ message: input.message, sender_type: input.sender_type }),
+  });
+}
+
+export function sendManualReply(token: string | null, conversationId: string, message: string) {
+  return apiFetch<{ status: string; message: string }>(`/api/v1/email-conversations/${conversationId}/reply`, token, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+}
+
+export function stopConversation(token: string | null, conversationId: string) {
+  return apiFetch<{ status: string }>(`/api/v1/email-conversations/${conversationId}/stop`, token, {
+    method: 'POST',
+  });
+}
+
+export function resumeConversation(token: string | null, conversationId: string) {
+  return apiFetch<{ status: string }>(`/api/v1/email-conversations/${conversationId}/resume`, token, {
+    method: 'POST',
+  });
+}
+
+export function getConversation(token: string | null, conversationId: string) {
+  return apiFetch<ConversationWithMessages>(`/api/v1/email-conversations/${conversationId}`, token);
+}
+
+export function bookMeeting(token: string | null, input: BookingRequest) {
+  return apiFetch<{ booking_ref: string; lead_name: string; lead_email: string; lead_company: string; meeting_datetime: string; lead_id: string | null }>(
+    '/api/v1/email-conversations/book-meeting', token, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export function saveBusinessInfo(token: string | null, conversationId: string, input: BusinessInfoRequest) {
+  return apiFetch<{ status: string; business_context: any }>(
+    `/api/v1/email-conversations/${conversationId}/business-info`, token, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export function getActiveConversations(token: string | null, accountId: string) {
+  return apiFetch<ConversationListResponse>(`/api/v1/email-conversations/accounts/${accountId}/active`, token);
+}
+
+export function downloadBookedLeadsCsv(token: string | null) {
+  return fetch(`${import.meta.env.VITE_API_URL}/api/v1/email-conversations/booked-leads/export`, {
+    headers: {
+      'Authorization': token ? `Bearer ${token}` : '',
+    },
+  }).then(res => res.blob());
+}
+
+export function checkAccountQuota(token: string | null, accountId: string) {
+  return apiFetch<EmailQuotaDTO>(`/api/v1/email-conversations/accounts/${accountId}/quota`, token);
 }

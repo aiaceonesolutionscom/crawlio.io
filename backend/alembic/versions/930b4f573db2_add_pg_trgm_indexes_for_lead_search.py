@@ -17,6 +17,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
+
+    if is_sqlite:
+        # SQLite has no pg_trgm extension or GIN indexes; keep a lower()
+        # expression index instead so the migration can run on local dev.
+        op.drop_index("ix_leads_name_lower", table_name="leads")
+        op.drop_index("ix_leads_company_lower", table_name="leads")
+        op.drop_index("ix_leads_email_lower", table_name="leads")
+        op.execute("CREATE INDEX ix_leads_name_trgm ON leads (lower(name))")
+        op.execute("CREATE INDEX ix_leads_company_trgm ON leads (lower(company))")
+        op.execute("CREATE INDEX ix_leads_email_trgm ON leads (lower(email))")
+        return
+
     # The btree indexes from the previous migration can't accelerate `lower(col) LIKE '%term%'`
     # (btree needs an expression index at minimum, and even then can't serve a leading wildcard).
     # pg_trgm + GIN is what actually makes substring search fast.

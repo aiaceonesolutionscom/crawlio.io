@@ -21,9 +21,10 @@ interface Props {
   leadId?: string;
   leadName?: string;
   leadCompany?: string;
+  leadEmail?: string;
 }
 
-export function RAGAgentPanel({ emailAccountId, leadId, leadName, leadCompany }: Props) {
+export function RAGAgentPanel({ emailAccountId, leadId, leadName, leadCompany, leadEmail }: Props) {
   const { getToken } = useAuth();
   const [conversation, setConversation] = useState<EmailConversationDTO | null>(null);
   const [messages, setMessages] = useState<EmailConversationMessageDTO[]>([]);
@@ -62,6 +63,8 @@ export function RAGAgentPanel({ emailAccountId, leadId, leadName, leadCompany }:
         email_account_id: emailAccountId,
         lead_id: leadId,
         subject: leadName ? `Outreach to ${leadName}` : 'Outreach Conversation',
+        lead_name: leadName,
+        lead_email: leadEmail,
       });
       setConversation(conv);
       setSuccess('Agent session started! Tell me about your business.');

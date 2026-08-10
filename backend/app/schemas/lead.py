@@ -44,6 +44,12 @@ class LeadRead(BaseModel):
     source: Optional[str]
     scoring_failed: bool = False
     social_links: dict[str, str] = Field(default_factory=dict)
+    completeness: Optional[int] = None
+    enrichment_status: Optional[str] = None
+    enrichment_source: Optional[str] = None
+    last_enriched_at: Optional[str] = None
+    description: Optional[str] = None
+    hours: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -88,6 +94,12 @@ def lead_to_read(lead) -> LeadRead:
         source=lead.source,
         scoring_failed=bool(metadata.get("scoring_failed")),
         social_links=metadata.get("social_links") or {},
+        completeness=metadata.get("completeness"),
+        enrichment_status=metadata.get("enrichment_status"),
+        enrichment_source=metadata.get("enrichment_source"),
+        last_enriched_at=metadata.get("last_enriched_at"),
+        description=metadata.get("description"),
+        hours=metadata.get("hours"),
         created_at=lead.created_at,
         updated_at=lead.updated_at,
     )

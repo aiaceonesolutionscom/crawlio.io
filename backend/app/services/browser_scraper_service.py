@@ -1,94 +1,89 @@
 import asyncio
 import logging
+from typing import Optional
 from urllib.parse import urljoin
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
-from app.services.contact_extraction import (
-    extract_mailto,
-    extract_tel,
-    find_social_links,
-    first_valid_email,
-    first_valid_phone,
-)
+from app.services.scrape_utils import aggregate_contacts, discover_contact_urls, normalize_website_url
 
 logger = logging.getLogger(__name__)
 
-# Checked in order per site, stopping as soon as email+phone+socials are all
-# found. Same ordering as the plain-HTTP scraper (website_scraper_service) —
-# a contact/about page is far more likely to list an email than the homepage.
-CONTACT_PATHS = ["", "/contact", "/contact-us", "/contact.html", "/about", "/about-us"]
 NAV_TIMEOUT_MS = 12_000
 # Real-browser navigation can still be mid-render right after "domcontentloaded"
-# fires (JS-injected footers, cookie-consent-gated content) — a short settle
+# fires (JS-injected footers, cookie-consent-gated content) -- a short settle
 # window catches most of that without waiting for full network idle, which
 # some sites (ad trackers, chat widgets) never actually reach.
 SETTLE_MS = 400
 # Each concurrent scrape holds open a browser page/tab; unbounded concurrency
 # against a large batch would spike memory and can trip site-side rate limits.
 MAX_CONCURRENT_PAGES = 6
+MAX_PAGES_PER_SITE = 8
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
 
-def _extract(html: str) -> dict:
-    return {
-        "email": extract_mailto(html) or first_valid_email(html),
-        "phone": extract_tel(html) or first_valid_phone(html),
-        "social_links": find_social_links(html),
-    }
+async def _scrape_one(context, url: str, country_code: Optional[str]) -> dict:
+    """Navigate a single business site: homepage, then discovered contact
+    subpages, and aggregate ranked contacts across whatever loaded."""
+    target = normalize_website_url(url)
+    if not target:
+        return {}
 
-
-async def _scrape_one(context, url: str) -> dict:
-    target = url if url.startswith(("http://", "https://")) else f"https://{url}"
-    # A URL handed in here (e.g. from Tavily's website lookup) can already be a
-    # specific subpage like ".../contact" rather than the bare domain — using
-    # urljoin (like website_scraper_service does) means an absolute CONTACT_PATHS
-    # entry replaces that page's path instead of being appended onto it, which
-    # naive string concatenation would turn into a nonsense ".../contact/contact".
-    found: dict = {}
-    social_links: dict[str, str] = {}
     page = await context.new_page()
+    pages_html: list[str] = []
+    home_loaded = False
     try:
-        for i, path in enumerate(CONTACT_PATHS):
-            if found.get("email") and found.get("phone") and social_links:
-                break
-            try:
-                await page.goto(urljoin(target, path), timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-            except PlaywrightError:
-                if i == 0:
-                    # Homepage itself didn't load — site is down or blocking us;
-                    # further subpaths would just repeat the same timeout.
-                    break
-                continue
+        try:
+            await page.goto(target, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             await page.wait_for_timeout(SETTLE_MS)
-            try:
-                html = await page.content()
-            except PlaywrightError:
-                continue
+            home_html = await page.content()
+            pages_html.append(home_html)
+            home_loaded = True
+        except PlaywrightError:
+            pass
 
-            sub_found = _extract(html)
-            found["email"] = found.get("email") or sub_found.get("email")
-            found["phone"] = found.get("phone") or sub_found.get("phone")
-            for platform, link in sub_found.get("social_links", {}).items():
-                social_links.setdefault(platform, link)
+        if home_loaded:
+            sub_urls = discover_contact_urls(target, pages_html[0], max_urls=MAX_PAGES_PER_SITE)
+            for sub_url in sub_urls[:MAX_PAGES_PER_SITE]:
+                try:
+                    await page.goto(urljoin(target, sub_url), timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(SETTLE_MS)
+                    html = await page.content()
+                    if html and html not in pages_html:
+                        pages_html.append(html)
+                except PlaywrightError:
+                    continue
     except Exception as exc:  # belt-and-suspenders: one bad site must never break the batch
         logger.warning("Browser scrape failed for %s: %s", target, exc)
     finally:
         await page.close()
 
+    if not pages_html:
+        return {}
+
+    result = aggregate_contacts(pages_html, website=target, country_code=country_code)
     return {
-        "email": found.get("email"),
-        "phone": found.get("phone"),
-        "social_links": social_links,
+        "email": result.get("email"),
+        "phone": result.get("phone"),
+        "website": normalize_website_url(result.get("website") or target) or None,
+        "address": result.get("address"),
+        "hours": result.get("hours"),
+        "description": result.get("description"),
+        "social_links": result.get("social_links") or {},
+        "email_candidates": result.get("email_candidates") or [],
+        "phone_candidates": result.get("phone_candidates") or [],
+        "page_text": result.get("page_text") or "",
     }
 
 
-async def extract_contact_details(urls: list[str]) -> list[dict]:
-    """Batch-scrapes multiple websites with real headless-browser rendering —
+async def extract_contact_details(
+    urls: list[str], country_code: Optional[str] = None
+) -> list[dict]:
+    """Batch-scrapes multiple websites with real headless-browser rendering --
     catches JS-injected contact info and dynamic footers a plain HTTP GET
     never sees. Uses ONE shared browser instance for the whole batch (launching
     a browser per URL would be far too resource-heavy) with concurrency capped
@@ -107,7 +102,7 @@ async def extract_contact_details(urls: list[str]) -> list[dict]:
 
                 async def _bounded(i: int, url: str) -> None:
                     async with semaphore:
-                        results[i] = await _scrape_one(context, url)
+                        results[i] = await _scrape_one(context, url, country_code)
 
                 await asyncio.gather(*(_bounded(i, url) for i, url in enumerate(urls)))
             finally:
@@ -119,8 +114,8 @@ async def extract_contact_details(urls: list[str]) -> list[dict]:
     return results
 
 
-async def extract_contact_from_website(url: str) -> dict:
+async def extract_contact_from_website(url: str, country_code: Optional[str] = None) -> dict:
     """Single-URL convenience wrapper for callers enriching one existing lead
     at a time (rather than a fresh batch of discovery results)."""
-    results = await extract_contact_details([url])
+    results = await extract_contact_details([url], country_code=country_code)
     return results[0] if results else {}

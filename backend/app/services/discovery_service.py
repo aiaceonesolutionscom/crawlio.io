@@ -1,247 +1,268 @@
-import asyncio
+"""Two-phase web lead discovery.
+
+Phase 1 (URL finder) lives here: a niche + city/country query is turned into a
+list of *real* candidate businesses found on the open web — either their own
+website (which Phase 2 crawls) or a website-less business surfaced through
+directory/listicle pages. OpenStreetMap/Overpass is gone; every candidate comes
+from Tavily + DuckDuckGo search results, so nothing is fabricated.
+
+Phase 2 (crawler) is enrichment_pipeline: each candidate's website is scraped
+for email/phone/socials, and Tavily + DuckDuckGo contact search fills the gaps
+for businesses that have no website at all.
+"""
 import logging
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
-import httpx
-
-from app.data.niches import resolve_niche_tags
+from app.services import duckduckgo_service, listing_extraction_service, tavily_service
+from app.services.contact_extraction import is_own_website
+from app.services.tavily_service import _social_platform_for_url
 
 logger = logging.getLogger(__name__)
-
-# Public Overpass instances, raced concurrently (see _run_overpass_query). The
-# main instance (overpass-api.de) is a free shared community resource and is
-# frequently overloaded (504 "server too busy") at peak times — this is not
-# specific to our usage, so we fall back across mirrors rather than treating
-# the first timeout as fatal.
-OVERPASS_MIRRORS = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-]
-
-DEFAULT_RADIUS_METERS = 15_000
-# Overpass server-side query timeout, in seconds. Kept modest — the mirrors are
-# raced concurrently, so total worst-case wait is ~this, not 3x this.
-OVERPASS_TIMEOUT_SECONDS = 12
-OVERPASS_HTTP_TIMEOUT = 15.0
-# The public Overpass instances 406 any User-Agent that doesn't look like curl's
-# own default (confirmed empirically: httpx's default UA, a descriptive custom
-# UA, and a browser UA were all rejected; "curl/x.y.z" was accepted). Unlike
-# Nominatim, Overpass has no documented UA requirement, so this just mirrors
-# whatever their edge/WAF allowlists.
-OVERPASS_HEADERS = {"User-Agent": "curl/8.4.0"}
 
 
 class DiscoveryUnavailableError(Exception):
     pass
 
 
-def _build_query(tags: list[dict[str, str]], lat: float, lon: float, radius_m: int, limit: int) -> str:
-    around = f"around:{radius_m},{lat},{lon}"
-    if tags:
-        clauses = []
-        for tag in tags:
-            (key, value), = tag.items()
-            clauses.append(f'node["{key}"="{value}"]({around});')
-            clauses.append(f'way["{key}"="{value}"]({around});')
-    else:
-        return ""
-    body = "\n  ".join(clauses)
-    return f"[out:json][timeout:{OVERPASS_TIMEOUT_SECONDS}];\n(\n  {body}\n);\nout center {limit};"
+# The URL-finder agent runs these query templates against BOTH engines. The
+# "official website" phrasing is intentionally first: it surfaces a business's
+# own domain directly, which is exactly what the Phase 2 crawler wants. The
+# other phrasings over-fetch so enough real candidates survive de-duplication
+# to fill the requested count.
+def _build_queries(niche: str, city: str, country: str) -> list[str]:
+    return [
+        f"official website for {niche} in {city} {country}",
+        f"{niche} in {city} {country}",
+        f"best {niche} in {city} {country}",
+        f"{niche} {city} {country} email phone contact",
+    ]
 
 
-def _build_fallback_query(keyword: str, lat: float, lon: float, radius_m: int, limit: int) -> str:
-    """No direct tag mapping for this niche — search by name across common
-    commercial tag categories instead. Less precise, but better than nothing."""
-    around = f"around:{radius_m},{lat},{lon}"
-    escaped = re.sub(r'[".\\]', "", keyword)
-    clauses = []
-    for key in ("shop", "office", "amenity", "craft", "healthcare", "leisure", "tourism"):
-        clauses.append(f'node["{key}"]["name"~"{escaped}",i]({around});')
-        clauses.append(f'way["{key}"]["name"~"{escaped}",i]({around});')
-    body = "\n  ".join(clauses)
-    return f"[out:json][timeout:{OVERPASS_TIMEOUT_SECONDS}];\n(\n  {body}\n);\nout center {limit};"
+# Aggregator/directory host fragments to reject even when the domain is not in
+# contact_extraction.NON_WEBSITE_DOMAINS (which is tuned for the enrichment
+# scrape, not discovery). A result on one of these is never the business's own
+# website.
+_DIRECTORY_MARKERS = (
+    "yellowpages", "yelp", "justdial", "tripadvisor", "cybo", "hotfrog",
+    "bizapedia", "zoominfo", "darpak", "foodiespakistan", "cybo",
+)
+
+_MAX_TAVILY_LISTING_PAGES = 4
+_TAVILY_LISTING_MIN_CONTENT_CHARS = 500
 
 
-_LATIN_RE = re.compile(r"^[\x00-\x7FÀ-ɏ\s,.\-/#&'()]*$")
+def _plausible_website(url: str) -> bool:
+    """A real business website: not a social/maps/directory domain and not on
+    the directory-marker list. `is_own_website` covers the known blocklist; the
+    markers catch aggregators that blocklist doesn't know about."""
+    if not url or not is_own_website(url) or _social_platform_for_url(url):
+        return False
+    host = urlparse(url).netloc.lower()
+    return not any(marker in host for marker in _DIRECTORY_MARKERS)
 
 
-def _is_latin_script(text: Optional[str]) -> bool:
-    return bool(text) and bool(_LATIN_RE.match(text))
+def _words_of(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
-_SOCIAL_TAG_KEYS = {
-    "contact:facebook": "facebook",
-    "facebook": "facebook",
-    "contact:instagram": "instagram",
-    "instagram": "instagram",
-    "contact:linkedin": "linkedin",
-    "linkedin": "linkedin",
-    "contact:twitter": "twitter",
-    "twitter": "twitter",
+def _looks_on_theme(result: dict, niche: str, city: str) -> bool:
+    """Soft relevance filter: a result should mention the niche or the city
+    somewhere in its title/url/snippet, otherwise it's off-topic for discovery
+    (e.g. a generic name match from another industry entirely)."""
+    hay = " ".join(str(result.get(k) or "") for k in ("title", "url", "content"))
+    hay_words = _words_of(hay)
+    return bool(_words_of(niche) & hay_words) or bool(_words_of(city) & hay_words)
+
+
+_REMOVE_NAME_SUFFIX_RE = re.compile(
+    r"\s*(official\s*website|home|web\s*site|contact\s*us?)\s*$", re.IGNORECASE
+)
+_NAME_SEPARATORS_RE = re.compile(r"\s*[|\u2013\u2014\u2022\u00b7]\s*")
+
+_TLD_SUFFIXES = {
+    "com", "co", "org", "net", "io", "me", "pk", "uk", "us", "ae", "sa",
+    "ca", "au", "nz", "de", "fr", "it", "es", "mx", "in", "bd", "lk", "eg",
 }
 
 
-def _social_links_from_tags(tags: dict) -> dict[str, str]:
-    links: dict[str, str] = {}
-    for tag_key, platform in _SOCIAL_TAG_KEYS.items():
-        value = tags.get(tag_key)
-        if value and platform not in links:
-            links[platform] = value
-    return links
+def _domain_token_name(url: str) -> Optional[str]:
+    host = urlparse(url).netloc.lower().removeprefix("www.").split(":")[0]
+    parts = re.split(r"[.-]", host)
+    while parts and parts[-1] in _TLD_SUFFIXES:
+        parts.pop()
+    if parts and parts[0] in ("www", "ww2"):
+        parts.pop(0)
+    words = [p for p in parts if len(p) > 1]
+    return " ".join(w.capitalize() for w in words) if words else None
 
 
-def _parse_elements(elements: list[dict], city_en: str, industry: str) -> list[dict]:
-    results = []
-    seen = set()
-    for el in elements:
-        tags = el.get("tags", {})
-        # Prefer the English name tag when a mapper set one — OSM contributors
-        # can tag "name" in the local script (e.g. Urdu), and we want English
-        # throughout the results.
-        name = tags.get("name:en") or tags.get("name")
-        if not name:
-            continue
-        # If there's no name:en and the raw name isn't in Latin script, we have
-        # no reliable English rendering of it — drop the result rather than
-        # show a name in a script the user can't read.
-        if not _is_latin_script(name):
-            continue
-
-        center = el.get("center") or {"lat": el.get("lat"), "lon": el.get("lon")}
-        lat, lon = center.get("lat"), center.get("lon")
-
-        # addr:city/addr:street are frequently tagged in the local script for
-        # non-Latin regions — since we already know the English city name the
-        # user searched for, use that instead of trusting the raw OSM tag, and
-        # drop a street line that isn't in Latin script rather than show it.
-        street_line = ", ".join(p for p in [tags.get("addr:housenumber"), tags.get("addr:street")] if p)
-        if street_line and not _is_latin_script(street_line):
-            street_line = ""
-        address = f"{street_line}, {city_en}" if street_line else city_en
-
-        website = tags.get("website") or tags.get("contact:website")
-        phone = tags.get("phone") or tags.get("contact:phone")
-        email = tags.get("email") or tags.get("contact:email")
-
-        # A result with nothing but a name isn't an actionable lead.
-        if not (phone or email or website or street_line):
-            continue
-
-        dedup_key = (name.lower(), phone or "", website or "")
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
-
-        results.append({
-            "name": name,
-            "phone": phone,
-            "email": email,
-            "website": website,
-            "address": address,
-            "industry": industry,
-            "social_links": _social_links_from_tags(tags),
-            "lat": lat,
-            "lon": lon,
-            "source": "openstreetmap",
-        })
-    return results
+def _clean_business_name(title: str, url: str) -> Optional[str]:
+    """Derive a business name from a search-result title, falling back to the
+    site's own domain. Titles usually read "Sakura Dental Studio – Dental
+    Clinic in Karachi | Official Website"."""
+    name = ""
+    if title:
+        first = _NAME_SEPARATORS_RE.split(title)[0].strip()
+        name = _REMOVE_NAME_SUFFIX_RE.sub("", first).strip()
+    if len(name) < 2:
+        name = _domain_token_name(url) or ""
+    return " ".join(re.findall(r"[a-zA-Z0-9&']+", name)) or None
 
 
-async def _query_one_mirror(client: httpx.AsyncClient, mirror: str, query: str) -> list[dict]:
-    resp = await client.post(mirror, data={"data": query})
-    resp.raise_for_status()
-    return resp.json().get("elements", [])
+def _candidate_from_result(result: dict, niche: str, city: str) -> Optional[dict]:
+    url = (result.get("url") or "").strip()
+    if not _plausible_website(url):
+        return None
+    if not _looks_on_theme(result, niche, city):
+        return None
+    name = _clean_business_name(result.get("title") or "", url)
+    if not name:
+        return None
+    return {
+        "name": name,
+        "website": url,
+        "address": city,
+        "industry": niche.strip().title(),
+        "social_links": {},
+        "source": "web_search",
+    }
 
 
-async def _run_overpass_query(query: str) -> list[dict]:
-    """Fires all mirrors at once and returns as soon as one comes back with actual
-    results, instead of trying them one at a time — a sequential fallback across
-    5 mirrors could take 5x the per-mirror timeout before giving up, far too slow
-    for an interactive search. A mirror that responds fast but empty (some public
-    mirrors have incomplete regional data) isn't treated as final — we keep
-    waiting for a fuller answer from another mirror until all have reported in."""
-    last_error: Optional[BaseException] = None
-    empty_result: Optional[list[dict]] = None
-    async with httpx.AsyncClient(timeout=OVERPASS_HTTP_TIMEOUT, headers=OVERPASS_HEADERS) as client:
-        tasks = {
-            asyncio.create_task(_query_one_mirror(client, mirror, query)): mirror
-            for mirror in OVERPASS_MIRRORS
-        }
-        pending = set(tasks)
-        try:
-            while pending:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    try:
-                        result = task.result()
-                    except (httpx.HTTPError, ValueError) as exc:
-                        logger.warning("Overpass mirror %s failed: %s", tasks[task], exc)
-                        last_error = exc
-                        continue
-                    if result:
-                        return result
-                    empty_result = result
-        finally:
-            for task in pending:
-                task.cancel()
-
-    if empty_result is not None:
-        return empty_result
-    raise DiscoveryUnavailableError(
-        "OpenStreetMap search is temporarily unavailable. Please try again in a moment."
-    ) from last_error
+def _name_key(item: dict) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (item.get("name") or "").lower())
 
 
-async def discover_businesses(
-    niche: str,
-    lat: float,
-    lon: float,
-    city: str,
-    limit: int = 50,
-    radius_m: int = DEFAULT_RADIUS_METERS,
-) -> list[dict]:
-    tags, matched = resolve_niche_tags(niche)
-    industry = niche.strip().title()
+def _website_key(item: dict) -> str:
+    return (item.get("website") or "").lower().rstrip("/")
 
-    # A 15km radius plausibly won't hold `limit` real matches for a niche
-    # business type — widen once if the first pass came up short, instead of
-    # silently handing back whatever the smallest radius found. Capped at two
-    # tiers total: each round races 5 mirrors already, so more tiers mainly
-    # adds latency (and, against rate-limited free mirrors, more 429s) rather
-    # than more results — OSM's actual coverage for a niche+city is often the
-    # real ceiling, not the radius.
-    radii = [radius_m] if radius_m >= 50_000 else [radius_m, 50_000]
-    collected: list[dict] = []
-    seen_keys: set[tuple] = set()
-    last_unavailable: Optional[DiscoveryUnavailableError] = None
 
-    for r in radii:
-        query = (
-            _build_query(tags, lat, lon, r, limit)
-            if matched
-            else _build_fallback_query(niche, lat, lon, r, limit)
+def _candidates_seen_add(candidates: list[dict], seen_names: set, seen_websites: set, item: dict) -> None:
+    name_key = _name_key(item)
+    website_key = _website_key(item)
+    if not name_key:
+        return
+    if name_key in seen_names:
+        return
+    if website_key and website_key in seen_websites:
+        return
+    seen_names.add(name_key)
+    if website_key:
+        seen_websites.add(website_key)
+    candidates.append(item)
+
+
+async def _find_direct_websites(niche: str, city: str, country: str) -> list[dict]:
+    """Search both engines with the query set and keep direct business-website
+    candidates. Returns [] on total failure so callers can tell providers apart
+    from 'no results' — provider-level failures are logged here."""
+    queries = _build_queries(niche, city, country)
+    candidates: list[dict] = []
+    engaged = False
+
+    try:
+        for query in queries[:3]:
+            results = await tavily_service.search(query, max_results=8)
+            for result in results:
+                item = _candidate_from_result(result, niche, city)
+                if item:
+                    candidates.append(item)
+        engaged = True
+    except Exception as exc:
+        logger.warning("Tavily URL-finder search failed for %s in %s: %s", niche, city, exc)
+
+    try:
+        for query in queries:
+            results = await duckduckgo_service.search(query, max_results=10)
+            for result in results:
+                item = _candidate_from_result(result, niche, city)
+                if item:
+                    candidates.append(item)
+        engaged = True
+    except Exception as exc:
+        logger.warning("DuckDuckGo URL-finder search failed for %s in %s: %s", niche, city, exc)
+
+    if not engaged:
+        raise DiscoveryUnavailableError(
+            "Web search is temporarily unavailable. Please try again in a moment."
         )
+    return candidates
+
+
+async def _find_website_less(
+    niche: str, city: str, country: str, needed: int
+) -> list[dict]:
+    """Website-less businesses from Tavily's directory/listicle pages: real
+    businesses that simply don't run their own site, surfaced through the raw
+    page content + an AI extraction pass."""
+    if needed <= 0:
+        return []
+    try:
+        pages = await tavily_service.discover_listing_pages(niche, city, country, max_results=6)
+    except Exception as exc:
+        logger.warning("Tavily listing discovery failed for %s in %s: %s", niche, city, exc)
+        return []
+
+    dir_pages = [
+        page for page in pages
+        if len(page.get("raw_content") or "") > _TAVILY_LISTING_MIN_CONTENT_CHARS
+    ][:_MAX_TAVILY_LISTING_PAGES]
+    if not dir_pages:
+        return []
+
+    collected: list[dict] = []
+    per_page = max(5, needed // len(dir_pages))
+    for page in dir_pages:
         try:
-            elements = await _run_overpass_query(query)
-        except DiscoveryUnavailableError as exc:
-            last_unavailable = exc
+            businesses = await listing_extraction_service.extract_businesses(
+                niche, city, page["raw_content"], max_items=per_page
+            )
+        except Exception as exc:
+            logger.warning("Listing extraction failed for a %s page in %s: %s", niche, city, exc)
             continue
+        for business in businesses:
+            collected.append({
+                **business,
+                "address": business.get("address") or city,
+                "industry": niche.strip().title(),
+                "social_links": {},
+                "source": "web_search",
+            })
+            if len(collected) >= needed:
+                return collected
+    return collected
 
-        for item in _parse_elements(elements, city, industry):
-            key = (item["name"].lower(), item["phone"] or "", item["website"] or "")
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            collected.append(item)
 
-        if len(collected) >= limit:
-            break
+async def discover_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
+    """Phase 1 URL finder. Returns up to `limit` unique, real businesses for a
+    niche in a city/country. Direct-website candidates are preferred; website-
+    less businesses fill the remaining slots. Never fabricates a lead and never
+    returns the same business twice."""
+    if limit < 1:
+        return []
 
-    if not collected and last_unavailable:
-        raise last_unavailable
+    direct = await _find_direct_websites(niche, city, country)
+    candidates: list[dict] = []
+    seen_names: set = set()
+    seen_websites: set = set()
 
-    return collected[:limit]
+    for item in direct:
+        _candidates_seen_add(candidates, seen_names, seen_websites, item)
+        if len(candidates) >= limit:
+            return candidates
+
+    if len(candidates) < limit:
+        website_less = await _find_website_less(niche, city, country, needed=limit - len(candidates))
+        for item in website_less:
+            _candidates_seen_add(candidates, seen_names, seen_websites, item)
+            if len(candidates) >= limit:
+                break
+
+    # Most usable first (a website beats phone beats nothing) so the returned
+    # slice is the strongest real candidates available.
+    candidates.sort(
+        key=lambda r: sum(bool(r.get(field)) for field in ("website", "phone", "email")),
+        reverse=True,
+    )
+    return candidates[:limit]

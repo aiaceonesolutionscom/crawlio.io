@@ -22,6 +22,7 @@ export interface Plan {
 export interface Workspace {
   name: string;
   plan: PlanId;
+  planSelected: boolean;
   leadsUsed: number;
   leadQuota: number;
   seatsUsed: number;

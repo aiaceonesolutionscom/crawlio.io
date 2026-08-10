@@ -19,6 +19,7 @@ function createLocalWorkspace(clerkUser: ReturnType<typeof useUser>['user']): Wo
     id: 'local-' + Date.now(),
     name: `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`,
     plan: 'free',
+    plan_selected: false,
     lead_quota: 500,
     seat_quota: 1,
     leads_used: 0,
@@ -40,27 +41,31 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
       setWorkspaceLoaded(true);
       return;
     }
-    const token = await getToken();
     try {
-      const ws = await getMyWorkspace(token);
-      setWorkspace(ws);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        try {
-          const name = `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`;
-          const ws = await createWorkspace(
-            token,
-            name,
-            clerkUser?.primaryEmailAddress?.emailAddress,
-            clerkUser?.fullName ?? clerkUser?.firstName ?? undefined
-          );
-          setWorkspace(ws);
-        } catch {
+      const token = await getToken();
+      try {
+        const ws = await getMyWorkspace(token);
+        setWorkspace(ws);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          try {
+            const name = `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`;
+            const ws = await createWorkspace(
+              token,
+              name,
+              clerkUser?.primaryEmailAddress?.emailAddress,
+              clerkUser?.fullName ?? clerkUser?.firstName ?? undefined
+            );
+            setWorkspace(ws);
+          } catch {
+            setWorkspace(createLocalWorkspace(clerkUser));
+          }
+        } else {
           setWorkspace(createLocalWorkspace(clerkUser));
         }
-      } else {
-        setWorkspace(createLocalWorkspace(clerkUser));
       }
+    } catch {
+      setWorkspace(createLocalWorkspace(clerkUser));
     } finally {
       setWorkspaceLoaded(true);
     }
@@ -78,7 +83,7 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
         const updated = await updateWorkspacePlan(token, workspace.id, plan);
         setWorkspace(updated);
       } catch {
-        setWorkspace({ ...workspace, plan });
+        setWorkspace({ ...workspace, plan, plan_selected: true });
       }
     },
     [workspace, getToken]
@@ -100,6 +105,7 @@ export function SessionProvider({ children }: {children: React.ReactNode;}) {
       workspace: {
         name: workspace.name,
         plan: workspace.plan,
+        planSelected: workspace.plan_selected,
         leadsUsed: workspace.leads_used,
         leadQuota: workspace.lead_quota,
         seatsUsed: workspace.seats_used,

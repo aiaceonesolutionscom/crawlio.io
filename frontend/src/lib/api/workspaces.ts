@@ -5,6 +5,7 @@ export interface WorkspaceDTO {
   id: string;
   name: string;
   plan: PlanId;
+  plan_selected: boolean;
   lead_quota: number;
   seat_quota: number;
   leads_used: number;

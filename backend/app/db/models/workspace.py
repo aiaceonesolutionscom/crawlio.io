@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -27,6 +27,10 @@ class Workspace(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     plan: Mapped[str] = mapped_column(String(20), nullable=False, default="free")
+    # False until the owner explicitly confirms a plan on the post-signup pricing
+    # step — every workspace starts on "free" regardless, so this is the only way
+    # to tell "picked Free on purpose" apart from "never went through onboarding".
+    plan_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     lead_quota: Mapped[int] = mapped_column(Integer, nullable=False, default=500)
     seat_quota: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     webhook_token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, default=_new_webhook_token)

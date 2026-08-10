@@ -7,5 +7,6 @@ export function PlanRedirect() {
   const { user, isLoaded } = useSession();
   if (!isLoaded) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (!user.workspace.planSelected) return <Navigate to="/select-plan" replace />;
   return <Navigate to={`/app/${user.workspace.plan}`} replace />;
 }

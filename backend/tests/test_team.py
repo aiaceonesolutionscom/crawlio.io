@@ -1,4 +1,7 @@
-from app.core.plans import PLAN_LIMITS
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.db.models.plan_config import PlanConfig
 from app.workers.tasks_email import send_invite_email_task, send_welcome_email_task
 
 
@@ -33,9 +36,15 @@ async def test_invite_member_creates_pending_entry(client_factory, monkeypatch):
     assert any(item["status"] == "Active" for item in items)
 
 
-async def test_invite_enforces_seat_quota(client_factory, monkeypatch):
+async def test_invite_enforces_seat_quota(client_factory, db_engine, monkeypatch):
     monkeypatch.setattr(send_invite_email_task, "delay", lambda *args: None)
-    monkeypatch.setitem(PLAN_LIMITS["pro"], "seats", 2)
+
+    # seat_quota is copied onto the workspace row from plan_configs at
+    # plan-change time, so lower the seeded "pro" limit before upgrading below.
+    session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with session_maker() as session:
+        await session.execute(update(PlanConfig).where(PlanConfig.plan_key == "pro").values(seat_quota=2))
+        await session.commit()
 
     async with client_factory("user_team_quota") as client:
         created = await client.post("/api/v1/workspaces", json={"name": "Acme"})

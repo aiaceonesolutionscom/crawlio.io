@@ -18,6 +18,7 @@ class WorkspaceRead(BaseModel):
     id: str
     name: str
     plan: PlanId
+    plan_selected: bool
     lead_quota: int
     seat_quota: int
     leads_used: int

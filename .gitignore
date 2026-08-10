@@ -28,6 +28,10 @@ backend/.mypy_cache/
 
 # Local tooling state
 .claude/
+*.pid
+
+# Stray nested clone (redundant reference copy, has its own .git)
+/crawlio.io/
 
 # Editor directories and files
 .vscode/*

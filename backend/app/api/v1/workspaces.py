@@ -19,6 +19,7 @@ async def _to_read_model(session: AsyncSession, workspace: Workspace) -> Workspa
         id=workspace.id,
         name=workspace.name,
         plan=workspace.plan,
+        plan_selected=workspace.plan_selected,
         lead_quota=workspace.lead_quota,
         seat_quota=workspace.seat_quota,
         leads_used=leads_used,

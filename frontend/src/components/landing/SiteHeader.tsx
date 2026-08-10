@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MenuIcon, XIcon } from 'lucide-react';
+import { SignedIn, SignedOut } from '@clerk/clerk-react';
 import { ButtonLink } from '../../shared/ui/Button';
 import { Logo } from '../../shared/ui/Logo';
 
@@ -34,12 +35,19 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-2 md:flex">
-          <ButtonLink to="/login" variant="ghost" size="sm">
-            Login
-          </ButtonLink>
-          <ButtonLink to="/signup" size="sm">
-            Get started
-          </ButtonLink>
+          <SignedOut>
+            <ButtonLink to="/login" variant="ghost" size="sm">
+              Login
+            </ButtonLink>
+            <ButtonLink to="/signup" size="sm">
+              Get started
+            </ButtonLink>
+          </SignedOut>
+          <SignedIn>
+            <ButtonLink to="/app" size="sm">
+              Go to dashboard
+            </ButtonLink>
+          </SignedIn>
         </div>
 
         <button
@@ -68,10 +76,15 @@ export function SiteHeader() {
           )}
           </nav>
           <div className="mt-4 flex flex-col gap-2">
-            <ButtonLink to="/login" variant="outline">
-              Login
-            </ButtonLink>
-            <ButtonLink to="/signup">Get started — it&rsquo;s free</ButtonLink>
+            <SignedOut>
+              <ButtonLink to="/login" variant="outline">
+                Login
+              </ButtonLink>
+              <ButtonLink to="/signup">Get started — it&rsquo;s free</ButtonLink>
+            </SignedOut>
+            <SignedIn>
+              <ButtonLink to="/app">Go to dashboard</ButtonLink>
+            </SignedIn>
           </div>
         </div>
       }

@@ -31,8 +31,11 @@ async def compute_overview(session: AsyncSession, workspace_id: str) -> dict[str
     leads_over_time = []
     for i in range(7, -1, -1):
         start = now - timedelta(weeks=i + 1)
+        # Inclusive upper bound: a lead created in the same instant this "now"
+        # was captured (clock resolution ties are common on Windows) must still
+        # land in the current bucket rather than falling through every range.
         end = now - timedelta(weeks=i)
-        week_leads = [lead for lead in leads if start <= _as_utc(lead.created_at) < end]
+        week_leads = [lead for lead in leads if start <= _as_utc(lead.created_at) <= end]
         leads_over_time.append({
             "week": f"W{8 - i}",
             "leads": len(week_leads),

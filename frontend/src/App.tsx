@@ -5,9 +5,29 @@ import { SessionProvider } from './contexts/SessionContext';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
+import { SelectPlan } from './pages/SelectPlan';
 import { RequireAuth } from './routes/RequireAuth';
 import { RequirePlan } from './routes/RequirePlan';
+import { RequireSuperAdmin } from './routes/RequireSuperAdmin';
 import { PlanRedirect } from './routes/PlanRedirect';
+import { AdminSessionProvider } from './contexts/AdminSessionContext';
+
+// Admin is its own lazy chunk, entirely separate from the tier bundles below —
+// a normal customer session never downloads it.
+const AdminLayout = lazy(() => import('./admin/AdminLayout').then((m) => ({ default: m.AdminLayout })));
+const AdminDashboard = lazy(() => import('./admin/pages/Dashboard').then((m) => ({ default: m.Dashboard })));
+const AdminWorkspaces = lazy(() => import('./admin/pages/Workspaces').then((m) => ({ default: m.Workspaces })));
+const AdminPlanConfigs = lazy(() => import('./admin/pages/PlanConfigs').then((m) => ({ default: m.PlanConfigs })));
+const AdminPlatformAdmins = lazy(() =>
+  import('./admin/pages/PlatformAdmins').then((m) => ({ default: m.PlatformAdmins }))
+);
+const AdminAuditLog = lazy(() => import('./admin/pages/AuditLog').then((m) => ({ default: m.AuditLog })));
+const AdminFeatureFlags = lazy(() =>
+  import('./admin/pages/FeatureFlags').then((m) => ({ default: m.FeatureFlags }))
+);
+const AdminSystemSettings = lazy(() =>
+  import('./admin/pages/SystemSettings').then((m) => ({ default: m.SystemSettings }))
+);
 
 // Each tier is its own lazy chunk: a Free session never downloads Pro/Enterprise code.
 const FreeLayout = lazy(() => import('./app/free/FreeLayout').then((m) => ({ default: m.FreeLayout })));
@@ -60,6 +80,7 @@ export function App() {
             <Route path="/signup/*" element={<Signup />} />
 
             <Route path="/app" element={<RequireAuth><PlanRedirect /></RequireAuth>} />
+            <Route path="/select-plan" element={<RequireAuth><SelectPlan /></RequireAuth>} />
 
             <Route
               path="/app/free"
@@ -115,6 +136,27 @@ export function App() {
               <Route path="analytics" element={<EnterpriseAnalytics />} />
               <Route path="team" element={<EnterpriseTeam />} />
               <Route path="settings" element={<EnterpriseSettings />} />
+            </Route>
+
+            <Route
+              path="/admin"
+              element={
+                <RequireAuth>
+                  <AdminSessionProvider>
+                    <RequireSuperAdmin>
+                      <AdminLayout />
+                    </RequireSuperAdmin>
+                  </AdminSessionProvider>
+                </RequireAuth>
+              }
+            >
+              <Route index element={<AdminDashboard />} />
+              <Route path="workspaces" element={<AdminWorkspaces />} />
+              <Route path="plan-configs" element={<AdminPlanConfigs />} />
+              <Route path="platform-admins" element={<AdminPlatformAdmins />} />
+              <Route path="audit-log" element={<AdminAuditLog />} />
+              <Route path="feature-flags" element={<AdminFeatureFlags />} />
+              <Route path="system-settings" element={<AdminSystemSettings />} />
             </Route>
 
             <Route path="/dashboard/*" element={<Navigate to="/app" replace />} />

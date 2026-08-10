@@ -53,7 +53,7 @@ export function Signup() {
               routing="path"
               path="/signup"
               signInUrl="/login"
-              fallbackRedirectUrl="/"
+              fallbackRedirectUrl="/app"
               appearance={CLERK_APPEARANCE}
             />
           </div>

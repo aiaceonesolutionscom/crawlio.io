@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowRightIcon, PlayIcon, SparklesIcon } from 'lucide-react';
+import { SignedOut } from '@clerk/clerk-react';
 import { Button, ButtonLink } from '../../shared/ui/Button';
 import { HeroBackdrop } from './HeroBackdrop';
 
@@ -96,9 +97,11 @@ export function Hero() {
               <span aria-hidden="true">·</span>
               <span>No credit card</span>
               <span aria-hidden="true">·</span>
-              <ButtonLink to="/login" variant="ghost" size="sm" className="-ml-3.5">
-                Already have an account? Login
-              </ButtonLink>
+              <SignedOut>
+                <ButtonLink to="/login" variant="ghost" size="sm" className="-ml-3.5">
+                  Already have an account? Login
+                </ButtonLink>
+              </SignedOut>
             </motion.div>
           </div>
 

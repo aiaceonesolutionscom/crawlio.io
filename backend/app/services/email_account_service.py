@@ -24,18 +24,6 @@ async def get_google_auth_url(state: str) -> str:
     return f"https://accounts.google.com/o/oauth2/v2/auth?{query}"
 
 
-async def get_microsoft_auth_url(state: str) -> str:
-    params = {
-        "client_id": settings.microsoft_client_id,
-        "redirect_uri": settings.microsoft_redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile Mail.ReadWrite Mail.Send",
-        "state": state,
-    }
-    query = "&".join(f"{k}={v}" for k, v in params.items())
-    return f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize?{query}"
-
-
 async def exchange_google_code(code: str) -> dict:
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
@@ -45,22 +33,6 @@ async def exchange_google_code(code: str) -> dict:
                 "client_id": settings.google_client_id,
                 "client_secret": settings.google_client_secret,
                 "redirect_uri": settings.google_redirect_uri,
-                "grant_type": "authorization_code",
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def exchange_microsoft_code(code: str) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-            data={
-                "code": code,
-                "client_id": settings.microsoft_client_id,
-                "client_secret": settings.microsoft_client_secret,
-                "redirect_uri": settings.microsoft_redirect_uri,
                 "grant_type": "authorization_code",
             },
         )
@@ -86,39 +58,10 @@ async def refresh_google_token(account: EmailAccount) -> str:
         return data["access_token"]
 
 
-async def refresh_microsoft_token(account: EmailAccount) -> str:
-    if not account.refresh_token:
-        raise RuntimeError("No refresh token available")
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-            data={
-                "refresh_token": account.refresh_token,
-                "client_id": settings.microsoft_client_id,
-                "client_secret": settings.microsoft_client_secret,
-                "grant_type": "refresh_token",
-                "scope": "openid email profile Mail.ReadWrite Mail.Send",
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["access_token"]
-
-
 async def get_google_user_info(access_token: str) -> dict:
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(
             "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def get_microsoft_user_info(access_token: str) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            "https://graph.microsoft.com/v1.0/me",
             headers={"Authorization": f"Bearer {access_token}"},
         )
         resp.raise_for_status()
@@ -147,38 +90,6 @@ async def connect_gmail_account(
         email_address=email,
         display_name=name,
         provider="google",
-        access_token=access_token,
-        refresh_token=refresh_token,
-        token_expires_at=expires_at,
-    )
-    session.add(account)
-    await session.commit()
-    await session.refresh(account)
-    return account
-
-
-async def connect_microsoft_account(
-    session: AsyncSession, workspace_id: str, user_id: str, code: str
-) -> EmailAccount:
-    token_data = await exchange_microsoft_code(code)
-    access_token = token_data["access_token"]
-    refresh_token = token_data.get("refresh_token")
-    expires_in = token_data.get("expires_in", 3600)
-
-    user_info = await get_microsoft_user_info(access_token)
-    email = user_info.get("mail") or user_info.get("userPrincipalName", "")
-    name = user_info.get("displayName", "")
-
-    expires_at = datetime.now(timezone.utc).replace(
-        second=0, microsecond=0
-    ) + __import__("datetime").timedelta(seconds=expires_in)
-
-    account = EmailAccount(
-        workspace_id=workspace_id,
-        user_id=user_id,
-        email_address=email,
-        display_name=name,
-        provider="microsoft",
         access_token=access_token,
         refresh_token=refresh_token,
         token_expires_at=expires_at,

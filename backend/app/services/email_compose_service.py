@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.email_account import EmailAccount, EmailDraft
 from app.db.models.email import EmailMessage
 from app.services.email_account_service import check_daily_quota, increment_sent_count
-from app.services.email_service import send_email as brevo_send_email
 
 
 async def create_draft(
@@ -84,6 +83,8 @@ async def send_draft(session: AsyncSession, draft_id: str) -> Optional[EmailMess
         raise RuntimeError("Email account not found")
 
     recipients = json.loads(draft.recipient_emails) if draft.recipient_emails else []
+    if not recipients:
+        raise RuntimeError("No recipient email — add a recipient before sending.")
 
     email_message = EmailMessage(
         workspace_id=draft.workspace_id,
@@ -98,8 +99,24 @@ async def send_draft(session: AsyncSession, draft_id: str) -> Optional[EmailMess
     await session.refresh(email_message)
 
     try:
+        # Send through the connected Gmail mailbox so the email lands in the
+        # real "Sent" folder and shows up in the app's Sent tab. Gmail is the
+        # only supported provider — fail loudly if none is connected.
+        if not account.provider:
+            raise RuntimeError("No connected email provider. Connect a Gmail account first.")
+
+        from app.services import email_sync_service
+
         for recipient in recipients:
-            await brevo_send_email(recipient, draft.subject, draft.body)
+            send_result = await email_sync_service.send_email_from_account(
+                session, account, recipient, draft.subject, draft.body
+            )
+            if send_result and not email_message.provider_message_id:
+                email_message.provider_message_id = (
+                    send_result.get("id")
+                    or send_result.get("messageId")
+                    or send_result.get("email_message_id")
+                )
 
         email_message.status = "sent"
         email_message.sent_at = datetime.now(timezone.utc)

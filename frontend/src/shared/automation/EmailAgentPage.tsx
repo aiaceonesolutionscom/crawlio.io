@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@clerk/clerk-react';
 import {
@@ -8,14 +8,15 @@ import {
   FileTextIcon, SearchIcon, ShieldAlertIcon
 } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { formatSender, getSenderFromEmail, parseSender } from '../utils/sender';
 import {
   listEmailAccounts,
   getGoogleAuthUrl,
-  getMicrosoftAuthUrl,
   getEmailQuota,
   type EmailAccountDTO,
   type EmailQuotaDTO,
   type EmailMessageDTO,
+  type EmailMessageListResponseDTO,
   startConversation,
   getConversation,
   sendManualReply,
@@ -43,7 +44,7 @@ import { OutreachTab } from './OutreachTab';
 import { CrmTab } from './CrmTab';
 import { ActivityPanel } from './ActivityPanel';
 
-type Step = 'business-info' | 'conversation' | 'preview' | 'booking';
+type Step = 'conversation' | 'preview' | 'booking';
 
 interface Props {
   backTo: string;
@@ -58,9 +59,11 @@ export function EmailAgentPage({ backTo }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const [writeAIOpen, setWriteAIOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'inbox' | 'sent' | 'trash'>('inbox');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'sent' | 'trash' | 'spam'>('inbox');
   const [emails, setEmails] = useState<EmailMessageDTO[]>([]);
   const [loadingEmails, setLoadingEmails] = useState(false);
+  const [emailPage, setEmailPage] = useState(1);
+  const [hasMoreEmails, setHasMoreEmails] = useState(false);
   const [selectedEmail, setSelectedEmail] = useState<EmailMessageDTO | null>(null);
   const [showAgent, setShowAgent] = useState(false);
   const [emailSearch, setEmailSearch] = useState('');
@@ -76,7 +79,7 @@ export function EmailAgentPage({ backTo }: Props) {
   const [messages, setMessages] = useState<EmailConversationMessageDTO[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [conversationStep, setConversationStep] = useState<Step>('business-info');
+  const [conversationStep, setConversationStep] = useState<Step>('conversation');
   const [previewDraft, setPreviewDraft] = useState<EmailDraftDTO | null>(null);
   const [previewEditing, setPreviewEditing] = useState(false);
   const [editSubject, setEditSubject] = useState('');
@@ -97,6 +100,13 @@ export function EmailAgentPage({ backTo }: Props) {
 
   // Three.js ref
   const canvasRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [messages, conversationStep]);
 
   const fetchAccounts = useCallback(async () => {
     setIsLoading(true);
@@ -132,36 +142,26 @@ export function EmailAgentPage({ backTo }: Props) {
     try {
       const token = await getToken();
 
-      // Sync-based auto-agent: let the backend detect new customer replies and
-      // auto-respond before we show the inbox.
+      // Fire-and-forget: auto-respond to new customer replies in the background
+      // so the inbox list renders immediately instead of blocking on Gmail + AI.
       if (activeTab === 'inbox') {
-        try {
-          await processInboundReplies(token, selectedAccount.id);
-        } catch {
+        processInboundReplies(token, selectedAccount.id).catch(() => {
           // Non-fatal — inbox should still load even if auto-respond fails.
-        }
+        });
       }
 
-      const res = await apiFetch<{ items: EmailMessageDTO[] }>(
-        `/api/v1/email-accounts/${selectedAccount.id}/${activeTab}`,
+      const res = await apiFetch<EmailMessageListResponseDTO>(
+        `/api/v1/email-accounts/${selectedAccount.id}/${activeTab}?page=${emailPage}&page_size=50`,
         token
       );
-      let filtered = res.items;
-      if (emailSearch) {
-        const searchLower = emailSearch.toLowerCase();
-        filtered = res.items.filter(
-          (e) =>
-            (e.subject || '').toLowerCase().includes(searchLower) ||
-            (e.from_email || '').toLowerCase().includes(searchLower)
-        );
-      }
-      setEmails(filtered);
+      setEmails(res.items);
+      setHasMoreEmails(res.has_more ?? false);
     } catch (err) {
       console.error('Failed to load emails:', err);
     } finally {
       setLoadingEmails(false);
     }
-  }, [getToken, selectedAccount, activeTab, emailSearch]);
+  }, [getToken, selectedAccount, activeTab, emailPage]);
 
   const fetchEmailDetail = useCallback(
     async (emailId: string) => {
@@ -190,12 +190,17 @@ export function EmailAgentPage({ backTo }: Props) {
         };
         setSelectedEmail(emailWithBody);
 
-        // Check if there's an existing conversation
+        // Check if there's an existing conversation (match by customer email or thread)
         const convRes = await apiFetch<{ items: EmailConversationDTO[] }>(
           `/api/v1/email-conversations/accounts/${selectedAccount.id}/active`,
           token
         );
-        const existing = convRes.items.find((c) => c.subject === emailWithBody.subject);
+        const senderEmail = (getSenderFromEmail(emailWithBody)?.email || '').toLowerCase();
+        const existing = convRes.items.find(
+          (c) =>
+            (senderEmail && c.customer_email && c.customer_email.toLowerCase() === senderEmail) ||
+            (emailWithBody.thread_id && c.thread_id && c.thread_id === emailWithBody.thread_id)
+        );
         if (existing) {
           const fullConv = await getConversation(token, existing.id);
           setConversation(existing);
@@ -220,7 +225,12 @@ export function EmailAgentPage({ backTo }: Props) {
         `/api/v1/email-conversations/accounts/${selectedAccount.id}/active`,
         token
       );
-      const existing = convRes.items.find((c) => c.subject === selectedEmail.subject);
+      const senderEmail = (getSenderFromEmail(selectedEmail)?.email || '').toLowerCase();
+      const existing = convRes.items.find(
+        (c) =>
+          (senderEmail && c.customer_email && c.customer_email.toLowerCase() === senderEmail) ||
+          (selectedEmail.thread_id && c.thread_id && c.thread_id === selectedEmail.thread_id)
+      );
       if (existing) {
         const fullConv = await getConversation(token, existing.id);
         setConversation(existing);
@@ -261,12 +271,12 @@ export function EmailAgentPage({ backTo }: Props) {
 
   useEffect(() => {
     void fetchEmails();
-  }, [selectedAccount, activeTab, emailSearch]);
+  }, [selectedAccount, activeTab]);
 
   const resetConversation = () => {
     setConversation(null);
     setMessages([]);
-    setConversationStep('business-info');
+    setConversationStep('conversation');
     setPreviewDraft(null);
     setBusinessName('');
     setBusinessSubject('');
@@ -286,36 +296,29 @@ export function EmailAgentPage({ backTo }: Props) {
     }
   };
 
-  const handleConnectMicrosoft = async () => {
-    try {
-      const token = await getToken();
-      const res = await getMicrosoftAuthUrl(token);
-      window.location.href = res.auth_url;
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to connect Microsoft.');
-    }
-  };
-
   const handleStartConversation = async () => {
-    if (!selectedEmail || !selectedAccount || !businessName || !businessSubject) return;
+    if (!selectedEmail || !selectedAccount) return;
 
     setIsGenerating(true);
     setError(null);
 
     try {
       const token = await getToken();
+      const sender = selectedEmail ? getSenderFromEmail(selectedEmail) : null;
       const conv = await startConversation(token, {
         email_account_id: selectedAccount.id,
         email_id: selectedEmail.id,
-        lead_name: selectedEmail.from_email,
-        lead_email: selectedEmail.from_email,
+        lead_name: sender?.name || '',
+        lead_email: sender?.email || '',
+        thread_id: selectedEmail.thread_id || null,
       });
       setConversation(conv);
 
-      await saveBusinessInfo(token, conv.id, {
-        business_name: businessName,
-        business_subject: businessSubject,
-        business_additional_info: businessInfo,
+      // Auto-fill business context from the saved business profile (no form needed).
+      await saveBusinessInfo(token, selectedAccount.id, conv.id, {
+        business_name: profile?.business_name || businessName,
+        business_subject: profile?.services || businessSubject,
+        business_additional_info: profile?.knowledge_base || businessInfo,
       });
 
       setConversationStep('conversation');
@@ -358,9 +361,9 @@ export function EmailAgentPage({ backTo }: Props) {
     try {
       const token = await getToken();
       const businessCtx = conversation.business_context;
-      let businessNameVal = businessName;
-      let businessSubjectVal = businessSubject;
-      let businessInfoVal = businessInfo;
+      let businessNameVal = profile?.business_name || businessName;
+      let businessSubjectVal = profile?.services || businessSubject;
+      let businessInfoVal = profile?.knowledge_base || businessInfo;
 
       if (businessCtx) {
         try {
@@ -373,11 +376,12 @@ export function EmailAgentPage({ backTo }: Props) {
         }
       }
 
+      const sender = selectedEmail ? getSenderFromEmail(selectedEmail) : null;
       const draft = await generateAIEmail(token, {
         email_account_id: selectedAccount.id,
-        prompt: `Generate outreach email to ${selectedEmail?.from_email}. Business: ${businessNameVal}. Subject: ${businessSubjectVal}. Additional: ${businessInfoVal}`,
-        lead_name: selectedEmail?.from_email,
-        lead_email: selectedEmail?.from_email,
+        prompt: `Generate outreach email to ${sender?.email || sender?.name || ''}. Business: ${businessNameVal}. Subject: ${businessSubjectVal}. Additional: ${businessInfoVal}`,
+        lead_name: sender?.name || '',
+        lead_email: sender?.email || '',
       });
       setPreviewDraft(draft);
       setConversationStep('preview');
@@ -519,6 +523,18 @@ export function EmailAgentPage({ backTo }: Props) {
     }
   };
 
+  const filteredEmails = useMemo(() => {
+    if (!emailSearch) return emails;
+    const q = emailSearch.toLowerCase();
+    return emails.filter(
+      (e) =>
+        (e.subject || '').toLowerCase().includes(q) ||
+        (e.from_email || '').toLowerCase().includes(q) ||
+        (getSenderFromEmail(e)?.name || '').toLowerCase().includes(q) ||
+        (getSenderFromEmail(e)?.email || '').toLowerCase().includes(q)
+    );
+  }, [emails, emailSearch]);
+
   const quotaPercent = quota ? Math.min(100, (quota.total_sent / quota.limit) * 100) : 0;
 
   // Simple Three.js background canvas
@@ -611,20 +627,8 @@ export function EmailAgentPage({ backTo }: Props) {
           <div className="p-4">
             <RAGAgentPanel
               emailAccountId={selectedAccount.id}
-              leadName={
-                selectedEmail
-                  ? (typeof (selectedEmail as any).from_email === 'string'
-                      ? (selectedEmail as any).from_email as string
-                      : '')
-                  : undefined
-              }
-              leadEmail={
-                selectedEmail
-                  ? (typeof (selectedEmail as any).from_email === 'string'
-                      ? (selectedEmail as any).from_email as string
-                      : '')
-                  : undefined
-              }
+              leadName={selectedEmail ? getSenderFromEmail(selectedEmail)?.name || undefined : undefined}
+              leadEmail={selectedEmail ? getSenderFromEmail(selectedEmail)?.email || undefined : undefined}
             />
           </div>
         </div>
@@ -707,6 +711,7 @@ export function EmailAgentPage({ backTo }: Props) {
                 key={account.id}
                 onClick={() => {
                   setSelectedAccount(account);
+                  setEmailPage(1);
                   resetConversation();
                 }}
                 className={cn(
@@ -725,12 +730,6 @@ export function EmailAgentPage({ backTo }: Props) {
               className="flex h-7 items-center gap-1 rounded-lg border border-ink-700 bg-ink-850 px-2 text-[11px] text-chalk-dim hover:border-ink-600"
             >
               <PlusIcon className="h-3 w-3" /> Gmail
-            </button>
-            <button
-              onClick={handleConnectMicrosoft}
-              className="flex h-7 items-center gap-1 rounded-lg border border-ink-700 bg-ink-850 px-2 text-[11px] text-chalk-dim hover:border-ink-600"
-            >
-              <PlusIcon className="h-3 w-3" /> Outlook
             </button>
           </div>
         </div>
@@ -818,6 +817,7 @@ export function EmailAgentPage({ backTo }: Props) {
                   key={tab.id}
                   onClick={() => {
                     setActiveTab(tab.id);
+                    setEmailPage(1);
                     setSelectedEmail(null);
                     resetConversation();
                   }}
@@ -894,7 +894,7 @@ export function EmailAgentPage({ backTo }: Props) {
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {emails.length === 0 && !loadingEmails ? (
+              {filteredEmails.length === 0 && !loadingEmails ? (
                 <div className="py-12 text-center">
                   <InboxIcon className="mx-auto h-10 w-10 text-ink-700" />
                   <p className="mt-2 text-[12px] text-chalk-dim">
@@ -907,7 +907,7 @@ export function EmailAgentPage({ backTo }: Props) {
                 </div>
               ) : (
                 <div className="divide-y divide-ink-800/70">
-                  {emails.map((email) => (
+                  {filteredEmails.map((email) => (
                     <div
                       key={email.id}
                       className={cn(
@@ -926,13 +926,40 @@ export function EmailAgentPage({ backTo }: Props) {
                           {email.date ? new Date(email.date).toLocaleDateString() : ''}
                         </span>
                       </div>
-                      <p className="truncate text-[11px] text-chalk-dim">{email.from_email || 'Unknown sender'}</p>
+                      <p className="truncate text-[11px] text-chalk-dim">
+                        {(() => {
+                          if (activeTab === 'sent') {
+                            const r = parseSender(email.to_email || '');
+                            return (r && (r.name || r.email)) || 'Unknown recipient';
+                          }
+                          const s = getSenderFromEmail(email);
+                          return (s && (s.name || s.email)) || 'Unknown sender';
+                        })()}
+                      </p>
                       <p className="truncate text-[10px] text-chalk-faint">{email.snippet || email.body_preview || 'No preview'}</p>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+
+            <footer className="flex items-center justify-between gap-2 border-t border-ink-850 px-3 py-1.5">
+              <button
+                onClick={() => setEmailPage((p) => Math.max(1, p - 1))}
+                disabled={emailPage <= 1 || loadingEmails}
+                className="flex h-6 items-center gap-1 rounded border border-ink-700 bg-ink-850 px-2 text-[10px] text-chalk-dim hover:border-ink-600 hover:text-chalk disabled:opacity-40"
+              >
+                <ArrowLeftIcon className="h-3 w-3" /> Prev
+              </button>
+              <span className="text-[10px] text-chalk-faint">Page {emailPage}</span>
+              <button
+                onClick={() => setEmailPage((p) => p + 1)}
+                disabled={!hasMoreEmails || loadingEmails}
+                className="flex h-6 items-center gap-1 rounded border border-ink-700 bg-ink-850 px-2 text-[10px] text-chalk-dim hover:border-ink-600 hover:text-chalk disabled:opacity-40"
+              >
+                Next <ArrowLeftIcon className="h-3 w-3 rotate-180" />
+              </button>
+            </footer>
           </section>
 
           {/* ===== READING PANE (persists alongside list) ===== */}
@@ -951,7 +978,11 @@ export function EmailAgentPage({ backTo }: Props) {
                     <h3 className="truncate text-[14px] font-semibold text-chalk">
                       {(selectedEmail as any).subject || '(No subject)'}
                     </h3>
-                    <p className="mt-0.5 text-[11px] text-chalk-dim">From: {(selectedEmail as any).from_email || 'Unknown'}</p>
+                    <p className="mt-0.5 text-[11px] text-chalk-dim">
+                      {activeTab === 'sent'
+                        ? `To: ${formatSender(parseSender(selectedEmail.to_email || '')) || 'Unknown'}`
+                        : `From: ${formatSender(getSenderFromEmail(selectedEmail)) || 'Unknown'}`}
+                    </p>
                   </div>
                   <button
                     onClick={() => {
@@ -972,114 +1003,152 @@ export function EmailAgentPage({ backTo }: Props) {
                 </div>
 
                 <div className="max-h-[46%] overflow-y-auto border-t border-ink-850 bg-ink-950 px-4 py-3">
-                  {conversationStep === 'business-info' && (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5 text-[11px] text-chalk-dim">
-                        <MessageCircleIcon className="h-3 w-3" />
-                        Start AI Agent for this email
-                      </div>
-                      <div className="space-y-1.5">
-                        <input
-                          type="text"
-                          value={businessName}
-                          onChange={(e) => setBusinessName(e.target.value)}
-                          placeholder="Business name"
-                          className="h-8 w-full rounded-lg border border-ink-700 bg-ink-900 px-2.5 text-[12px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none"
-                        />
-                        <input
-                          type="text"
-                          value={businessSubject}
-                          onChange={(e) => setBusinessSubject(e.target.value)}
-                          placeholder="What you do"
-                          className="h-8 w-full rounded-lg border border-ink-700 bg-ink-900 px-2.5 text-[12px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none"
-                        />
-                        <textarea
-                          value={businessInfo}
-                          onChange={(e) => setBusinessInfo(e.target.value)}
-                          placeholder="Additional info (USP, offers...)"
-                          rows={2}
-                          className="w-full rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5 text-[12px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none"
-                        />
-                      </div>
-                      <button
-                        onClick={handleStartConversation}
-                        disabled={isGenerating || !businessName || !businessSubject || (quota ? quota.remaining <= 0 : false)}
-                        className="flex h-8 w-full items-center justify-center gap-1 rounded-lg border border-signal/50 bg-signal/10 text-[12px] text-signal hover:bg-signal/20 disabled:opacity-50"
-                      >
-                        {isGenerating ? <Loader2Icon className="h-3 w-3 animate-spin" /> : <SparklesIcon className="h-3 w-3" />}
-                        {isGenerating ? 'Starting...' : 'Start AI Agent'}
-                      </button>
-                    </div>
-                  )}
-
-                  {conversationStep === 'conversation' && conversation && (
+                  {conversationStep === 'conversation' && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between rounded-lg border border-ink-800 bg-ink-850 px-2.5 py-1.5">
                         <span className="flex items-center gap-1.5 text-[11px] text-chalk">
-                          <span className={cn('h-1.5 w-1.5 rounded-full', conversation.ai_agent_active ? 'bg-signal animate-pulse' : 'bg-ink-600')} />
-                          AI Agent {conversation.ai_agent_active ? 'Active' : 'Paused'}
+                          <span className={cn('h-1.5 w-1.5 rounded-full', conversation?.ai_agent_active ? 'bg-signal animate-pulse' : 'bg-ink-600')} />
+                          {profile?.business_name || 'AI'} Receptionist — {conversation?.ai_agent_active ? 'Active' : conversation ? 'Paused' : 'Idle'}
                         </span>
                         <div className="flex gap-1">
-                          {conversation.ai_agent_active ? (
-                            <button onClick={handleStop} className="flex h-6 items-center gap-1 rounded border border-ink-700 bg-ink-900 px-1.5 text-[10px] text-chalk-dim hover:border-ink-600">
-                              <StopCircleIcon className="h-3 w-3" /> Stop
-                            </button>
-                          ) : (
-                            <button onClick={handleResume} className="flex h-6 items-center gap-1 rounded border border-signal/30 bg-signal/10 px-1.5 text-[10px] text-signal hover:bg-signal/20">
-                              <PlayIcon className="h-3 w-3" /> Start
-                            </button>
-                          )}
                           <button
                             onClick={() => document.getElementById('manual-reply-input')?.focus()}
                             className="flex h-6 items-center gap-1 rounded border border-ink-700 bg-ink-900 px-1.5 text-[10px] text-chalk hover:border-ink-600"
                           >
                             <MessageCircleIcon className="h-3 w-3" /> Reply
                           </button>
-                          <button onClick={handlePreviewOutreach} disabled={isGenerating} className="flex h-6 items-center gap-1 rounded border border-signal/50 bg-signal/10 px-1.5 text-[10px] text-signal hover:bg-signal/20 disabled:opacity-50">
-                            {isGenerating ? <Loader2Icon className="h-3 w-3 animate-spin" /> : <SparklesIcon className="h-3 w-3" />} Preview
-                          </button>
+                          {conversation?.ai_agent_active ? (
+                            <button
+                              onClick={() => void handleStop()}
+                              className="flex h-6 items-center gap-1 rounded border border-ink-700 bg-ink-900 px-1.5 text-[10px] text-chalk-dim hover:border-ink-600"
+                            >
+                              <StopCircleIcon className="h-3 w-3" /> Stop Crawlio
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (conversation) {
+                                  void handleResume();
+                                } else {
+                                  void handleStartConversation();
+                                }
+                              }}
+                              disabled={isGenerating}
+                              className="flex h-6 items-center gap-1 rounded border border-signal/50 bg-signal/10 px-1.5 text-[10px] text-signal hover:bg-signal/20 disabled:opacity-50"
+                            >
+                              {isGenerating ? <Loader2Icon className="h-3 w-3 animate-spin" /> : <PlayIcon className="h-3 w-3" />}
+                              Start Crawlio
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      <div className="max-h-36 space-y-1.5 overflow-y-auto">
-                        {messages.map((msg) => (
-                          <div key={msg.id} className="space-y-1">
-                            <div
-                              className={cn(
-                                'rounded-lg px-2 py-1 text-[11px]',
-                                msg.sender_type === 'user'
-                                  ? 'ml-auto max-w-[80%] bg-signal/10 text-chalk'
-                                  : msg.sender_type === 'system'
-                                  ? 'mx-auto max-w-[90%] bg-amber/10 text-amber'
-                                  : 'mr-auto max-w-[80%] bg-ink-850 text-chalk'
-                              )}
-                            >
-                              {msg.content}
-                            </div>
-                            {msg.sender_type === 'system' && msg.content.includes('Meeting booked') && (
-                              <div className="ml-auto max-w-[80%] rounded-lg border border-signal/30 bg-signal/5 px-2 py-1">
-                                <p className="text-[9px] text-signal">Hot lead added to CRM. Meeting booked!</p>
-                              </div>
-                            )}
+                      <div ref={chatScrollRef} className="h-72 space-y-2 overflow-y-auto py-1">
+                        {!conversation ? (
+                          <div className="py-8 text-center text-[11px] text-chalk-faint">
+                            No conversation yet — press <span className="text-signal">Start Crawlio</span> to begin the AI receptionist for this email.
                           </div>
-                        ))}
+                        ) : messages.length === 0 ? (
+                          <div className="py-8 text-center text-[11px] text-chalk-faint">
+                            No messages yet — the AI agent replies to the customer here.
+                          </div>
+                        ) : (
+                          messages.map((msg) => {
+                            const isOutgoing = msg.sender_type === 'user' || msg.sender_type === 'ai';
+                            const isSystem = msg.sender_type === 'system';
+                            const label = isSystem
+                              ? 'System'
+                              : msg.sender_type === 'customer'
+                              ? (conversation?.customer_name || conversation?.customer_email || 'Customer')
+                              : msg.sender_type === 'ai'
+                              ? 'AI Agent'
+                              : 'You';
+                            const initial = (label.charAt(0) || '?').toUpperCase();
+                            const time = msg.created_at
+                              ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                              : '';
+                            const isBooked = isSystem && msg.content.includes('Meeting booked');
+                            return (
+                              <div
+                                key={msg.id}
+                                className={cn(
+                                  'flex items-end gap-1.5',
+                                  isSystem ? 'justify-center' : isOutgoing ? 'justify-end' : 'justify-start'
+                                )}
+                              >
+                                {!isSystem && !isOutgoing && (
+                                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ink-800 text-[9px] font-semibold text-chalk-dim">
+                                    {initial}
+                                  </div>
+                                )}
+                                <div className={cn('max-w-[82%]', isSystem && 'mx-auto')}>
+                                  {!isSystem && (
+                                    <div
+                                      className={cn('mb-0.5 text-[9px] text-chalk-faint', isOutgoing ? 'text-right' : 'text-left')}
+                                    >
+                                      {label}
+                                    </div>
+                                  )}
+                                  <div
+                                    className={cn(
+                                      'whitespace-pre-wrap break-words px-2.5 py-1.5 text-[11px]',
+                                      isSystem
+                                        ? 'rounded-full bg-amber/10 text-center text-amber/90'
+                                        : isOutgoing
+                                        ? 'rounded-2xl rounded-br-sm bg-signal/15 text-chalk'
+                                        : 'rounded-2xl rounded-bl-sm bg-ink-850 text-chalk'
+                                    )}
+                                  >
+                                    {msg.content}
+                                    {!isSystem && (
+                                      <span
+                                        className={cn(
+                                          'mt-0.5 block text-right text-[8px] leading-none text-chalk-faint/80'
+                                        )}
+                                      >
+                                        {time}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {isBooked && (
+                                    <div className="mt-1 rounded-lg border border-signal/30 bg-signal/5 px-2 py-1">
+                                      <p className="text-[9px] text-signal">Hot lead added to CRM. Meeting booked!</p>
+                                    </div>
+                                  )}
+                                </div>
+                                {!isSystem && isOutgoing && (
+                                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-signal/20 text-[9px] font-semibold text-signal">
+                                    {initial}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
                       </div>
 
-                      <div className="flex gap-1">
+                      <div className="flex items-end gap-1 pt-1">
                         <textarea
                           id="manual-reply-input"
                           value={manualReply}
                           onChange={(e) => setManualReply(e.target.value)}
-                          placeholder="Type a manual reply..."
-                          rows={2}
-                          className="min-h-[42px] flex-1 resize-y rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5 text-[12px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              if (conversation && manualReply.trim() && !isSending) void handleManualReply();
+                            }
+                          }}
+                          placeholder={conversation ? 'Type a message...' : 'Press Start Crawlio to begin the AI receptionist'}
+                          rows={1}
+                          disabled={!conversation}
+                          className="min-h-[36px] max-h-24 flex-1 resize-none rounded-2xl rounded-br-sm border border-ink-700 bg-ink-900 px-3 py-2 text-[12px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none disabled:opacity-50"
                         />
                         <button
-                          onClick={handleManualReply}
-                          disabled={isSending || !manualReply.trim()}
-                          className="flex h-8 self-end items-center justify-center rounded-lg border border-signal/50 bg-signal/10 text-signal disabled:opacity-50"
+                          onClick={() => void handleManualReply()}
+                          disabled={isSending || !conversation || !manualReply.trim()}
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-signal/50 bg-signal/10 text-signal hover:bg-signal/20 disabled:opacity-50"
                         >
-                          {isSending ? <Loader2Icon className="h-3 w-3 animate-spin" /> : <SendIcon className="h-3 w-3" />}
+                          {isSending ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <SendIcon className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>

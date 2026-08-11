@@ -23,10 +23,6 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/v1/email-accounts/oauth/google/callback"
 
-    microsoft_client_id: str = ""
-    microsoft_client_secret: str = ""
-    microsoft_redirect_uri: str = "http://localhost:8000/api/v1/email-accounts/oauth/microsoft/callback"
-
     email_token_encryption_key: str = ""
     pro_daily_email_limit: int = 100
     enterprise_daily_email_limit: int = 500

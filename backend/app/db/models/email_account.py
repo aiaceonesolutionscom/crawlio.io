@@ -52,6 +52,7 @@ class EmailConversation(Base):
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     ai_agent_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    thread_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     business_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     customer_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     customer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -74,6 +75,8 @@ class EmailConversationMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     is_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    direction: Mapped[str] = mapped_column(String(10), nullable=False, default="inbound")
+    provider_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     conversation: Mapped["EmailConversation"] = relationship(back_populates="messages")

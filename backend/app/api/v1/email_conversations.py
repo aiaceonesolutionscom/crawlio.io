@@ -37,7 +37,7 @@ async def start_conversation(
 
     conv = await email_conversation_service.start_conversation(
         session, workspace.id, input.email_account_id,
-        input.email_id, input.lead_name, input.lead_email
+        input.email_id, input.lead_name, input.lead_email, input.thread_id
     )
     return EmailConversationRead.model_validate(conv)
 

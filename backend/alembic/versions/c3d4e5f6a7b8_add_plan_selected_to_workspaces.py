@@ -22,7 +22,8 @@ def upgrade() -> None:
         "workspaces",
         sa.Column("plan_selected", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
-    op.alter_column("workspaces", "plan_selected", server_default=None)
+    if op.get_context().dialect.name != "sqlite":
+        op.alter_column("workspaces", "plan_selected", server_default=None)
 
 
 def downgrade() -> None:

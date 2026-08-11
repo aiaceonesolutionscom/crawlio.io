@@ -8,6 +8,7 @@ from app.db.models.email_account import (
     EmailConversationMessage,
     EmailDraft,
 )
+from app.db.models.agent import AIActivity, BusinessProfile, Meeting
 from app.db.models.feature_flag import FeatureFlag, FeatureFlagOverride
 from app.db.models.invitation import Invitation
 from app.db.models.lead import Lead, LeadEvent
@@ -32,6 +33,9 @@ __all__ = [
     "EmailConversationMessage",
     "EmailDraft",
     "DailyEmailQuota",
+    "BusinessProfile",
+    "Meeting",
+    "AIActivity",
     "PlatformAdmin",
     "PlanConfig",
     "FeatureFlag",

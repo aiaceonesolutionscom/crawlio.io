@@ -153,6 +153,20 @@ async def get_trash(
     return EmailMessageListResponse(items=[EmailMessageRead(**m) for m in messages])
 
 
+@router.get("/{account_id}/spam", response_model=EmailMessageListResponse)
+async def get_spam(
+    account_id: str,
+    workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
+    session: AsyncSession = Depends(get_session),
+):
+    account = await email_account_service.get_email_account(session, account_id)
+    if not account or account.workspace_id != workspace.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    messages = await email_sync_service.sync_spam(session, account)
+    return EmailMessageListResponse(items=[EmailMessageRead(**m) for m in messages])
+
+
 @router.get("/{account_id}/messages/{message_id}")
 async def get_message_detail(
     account_id: str,

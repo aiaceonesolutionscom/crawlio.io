@@ -4,6 +4,7 @@ import { XIcon, Loader2Icon, SparklesIcon, CheckIcon, UserIcon } from 'lucide-re
 import { motion, AnimatePresence } from 'framer-motion';
 import { generateAIEmail, approveAIEmail, checkAccountQuota, type EmailAccountDTO, type EmailDraftDTO, type EmailQuotaDTO } from '../../lib/api/emailAgent';
 import { ApiError } from '../../lib/api/client';
+import { SelectCrmLeadsDialog } from './SelectCrmLeadsDialog';
 
 interface Props {
   open: boolean;
@@ -23,6 +24,7 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [quota, setQuota] = useState<EmailQuotaDTO | null>(null);
+  const [showCrmPicker, setShowCrmPicker] = useState(false);
 
   const fetchQuota = useCallback(async () => {
     if (!selectedAccount) return;
@@ -248,9 +250,7 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
                     )}
 
                     <button
-                      onClick={() => {
-                        window.open('/crm', '_blank');
-                      }}
+                      onClick={() => setShowCrmPicker(true)}
                       className="flex h-9 items-center gap-2 rounded-lg border border-ink-700 bg-ink-850 px-3 text-[13px] text-chalk-dim hover:border-ink-600"
                       title="Select from CRM"
                     >
@@ -294,6 +294,20 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
           </motion.div>
         </div>
       )}
+      <SelectCrmLeadsDialog
+        open={showCrmPicker}
+        onClose={() => setShowCrmPicker(false)}
+        mode="single"
+        onSelect={(leads) => {
+          const lead = leads[0];
+          if (lead) {
+            setLeadName(lead.name);
+            setLeadCompany(lead.company || '');
+            setLeadEmail(lead.email);
+          }
+          setShowCrmPicker(false);
+        }}
+      />
     </AnimatePresence>
   );
 }

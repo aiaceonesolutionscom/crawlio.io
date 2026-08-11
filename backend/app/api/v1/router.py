@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.api.v1 import analytics, automation, crm, discovery, email_accounts, email_agent, email_ai, email_conversations, email_drafts, geo, leads, team, webhooks, workspaces
+from app.api.v1 import analytics, agent, automation, crm, discovery, email_accounts, email_agent, email_ai, email_conversations, email_drafts, geo, leads, team, webhooks, workspaces, ws
 from app.api.v1.admin import admin_router
 from app.core.deps import get_current_user_id
 
@@ -20,6 +20,8 @@ api_router.include_router(email_conversations.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(analytics.router)
 api_router.include_router(team.router)
+api_router.include_router(agent.router)
+api_router.include_router(ws.router)
 
 
 @api_router.get("/_whoami")

@@ -224,6 +224,8 @@ async def import_discovered(
                     phone=item.phone,
                     website=item.website,
                     address=item.address,
+                    lat=item.lat,
+                    lon=item.lon,
                     industry=item.industry,
                     social_links=item.social_links or None,
                     lead_metadata=enriched_meta or None,

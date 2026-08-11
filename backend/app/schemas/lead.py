@@ -10,6 +10,8 @@ class LeadCreate(BaseModel):
     phone: Optional[str] = None
     website: Optional[str] = None
     address: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
     industry: Optional[str] = None
     source: Optional[str] = None
     social_links: Optional[dict[str, str]] = None
@@ -38,6 +40,8 @@ class LeadRead(BaseModel):
     phone: Optional[str]
     website: Optional[str]
     address: Optional[str]
+    lat: Optional[float] = None
+    lon: Optional[float] = None
     industry: Optional[str]
     score: Optional[int]
     status: str
@@ -88,6 +92,8 @@ def lead_to_read(lead) -> LeadRead:
         phone=lead.phone,
         website=lead.website,
         address=lead.address,
+        lat=lead.lat,
+        lon=lead.lon,
         industry=lead.industry,
         score=lead.score,
         status=lead.status,

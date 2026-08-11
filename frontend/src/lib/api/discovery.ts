@@ -6,6 +6,8 @@ export interface DiscoveredLeadDTO {
   email: string | null;
   website: string | null;
   address: string | null;
+  lat: number | null;
+  lon: number | null;
   industry: string | null;
   social_links: Record<string, string>;
   source: string;

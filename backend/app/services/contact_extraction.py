@@ -28,6 +28,7 @@ SOCIAL_LINK_PATTERNS: dict[str, re.Pattern] = {
     "twitter": re.compile(r'https?://(?:www\.)?(?:twitter|x)\.com/[^\s"\'<>]+', re.IGNORECASE),
     "youtube": re.compile(r'https?://(?:www\.)?youtube\.com/@?[^\s"\'<>]+|https?://(?:www\.)?youtube\.com/c[^\s"\'<>]+', re.IGNORECASE),
     "tiktok": re.compile(r'https?://(?:www\.)?tiktok\.com/@[^\s"\'<>]+', re.IGNORECASE),
+    "whatsapp": re.compile(r'https?://(?:www\.)?(?:wa\.me|api\.whatsapp\.com)/[^\s"\'<>]+', re.IGNORECASE),
 }
 
 # Addresses/numbers that show up in scraped pages but aren't real business
@@ -134,8 +135,11 @@ def _is_valid_email(candidate: str) -> bool:
 
 
 def _is_disposable_email(email: str) -> bool:
+    # A blanket ".xyz" TLD reject used to live here, but that's a false-positive
+    # risk: legitimate small-business domains increasingly use cheap gTLDs like
+    # .xyz. Only the known throwaway-provider list counts as disposable now.
     domain = _email_domain(email)
-    return domain in DISPOSABLE_EMAIL_DOMAINS or domain.endswith(".xyz")
+    return domain in DISPOSABLE_EMAIL_DOMAINS
 
 
 def _is_placeholder_email(email: str) -> bool:
@@ -267,22 +271,34 @@ def _phone_country_penalty(candidate: str, country_code: Optional[str]) -> int:
     return 0
 
 
+_PHONE_CONTEXT_RE = re.compile(
+    r"(?:tel|phone|call|contact|whatsapp|mobile|cell|hotline|helpline)\s*[:\-]?\s*$",
+    re.IGNORECASE,
+)
+_PHONE_CONTEXT_WINDOW = 20
+
+
 def collect_phones(text: str, max_candidates: int = 30) -> list[str]:
     """Unique phone candidates from a page, decoded, in order of appearance."""
     seen: set[str] = set()
     out: list[str] = []
     decoded = _decode_entities(text or "")
-    for match in PHONE_RE.findall(decoded):
-        candidate = match.strip()
+    for match in PHONE_RE.finditer(decoded):
+        candidate = match.group(0).strip()
         if not _is_valid_phone_digits(candidate):
             continue
         digits = _phone_digits(candidate)
         if _looks_fake_phone(digits):
             continue
-        # Bare unformatted digit run loose in page text is far more often a
-        # timestamp/order-id/hash than a real displayed number.
+        # A bare unformatted digit run loose in page text is far more often a
+        # timestamp/order-id/hash than a real number — UNLESS it's immediately
+        # preceded by an explicit phone label ("Call: 03001234567" with no
+        # space is a common compact-footer pattern), in which case the context
+        # makes it trustworthy despite the missing formatting.
         if candidate == digits:
-            continue
+            window = decoded[max(0, match.start() - _PHONE_CONTEXT_WINDOW):match.start()]
+            if not _PHONE_CONTEXT_RE.search(window):
+                continue
         key = digits
         if key in seen:
             continue

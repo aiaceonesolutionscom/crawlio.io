@@ -194,6 +194,115 @@ async def test_enrich_item_rejects_invalid_ai_email(monkeypatch):
     assert result["phone"] == "+92 300 1234567"
 
 
+async def test_enrich_item_finds_socials_for_website_less_business_regardless_of_tier(monkeypatch):
+    """The no-website social-discovery step used to be gated behind use_ai
+    (effectively Pro-only) — a website-less free-tier business should still
+    get checked, since social media is often its only contact channel."""
+    from app.services import duckduckgo_service, tavily_service, website_scraper_service
+
+    async def no_website_lookup(*args, **kwargs):
+        return None
+
+    async def no_web_results(*args, **kwargs):
+        return []
+
+    async def tavily_socials(*args, **kwargs):
+        return {"facebook": "https://facebook.com/testcafe"}
+
+    async def ddg_socials(*args, **kwargs):
+        return {"instagram": "https://instagram.com/testcafe"}
+
+    monkeypatch.setattr(tavily_service, "find_website_url", no_website_lookup)
+    monkeypatch.setattr(duckduckgo_service, "find_website_url", no_website_lookup)
+    monkeypatch.setattr(tavily_service, "enrich_business", no_web_results)
+    monkeypatch.setattr(duckduckgo_service, "enrich_business", no_web_results)
+    monkeypatch.setattr(tavily_service, "find_social_links", tavily_socials)
+    monkeypatch.setattr(duckduckgo_service, "find_social_links", ddg_socials)
+
+    result = await enrichment_pipeline.enrich_item(
+        {"name": "Test Cafe", "address": "Karachi"},
+        city="Karachi", country="Pakistan", use_browser=False, use_ai=False,
+    )
+
+    # Both engines' results should be merged, not "stop after the first hit."
+    assert result["social_links"]["facebook"] == "https://facebook.com/testcafe"
+    assert result["social_links"]["instagram"] == "https://instagram.com/testcafe"
+
+
+async def test_enrich_item_social_search_not_skipped_when_partially_filled(monkeypatch):
+    """A single social link found upstream used to skip the whole social
+    lookup step entirely — it should instead keep looking for other
+    platforms, on top of what's already there."""
+    from app.services import duckduckgo_service, tavily_service
+
+    async def no_website_lookup(*args, **kwargs):
+        return None
+
+    async def tavily_socials(*args, **kwargs):
+        return {"instagram": "https://instagram.com/testcafe"}
+
+    async def ddg_socials(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(tavily_service, "find_website_url", no_website_lookup)
+    monkeypatch.setattr(duckduckgo_service, "find_website_url", no_website_lookup)
+    monkeypatch.setattr(tavily_service, "find_social_links", tavily_socials)
+    monkeypatch.setattr(duckduckgo_service, "find_social_links", ddg_socials)
+
+    result = await enrichment_pipeline.enrich_item(
+        {"name": "Test Cafe", "address": "Karachi", "social_links": {"facebook": "https://facebook.com/testcafe"}},
+        city="Karachi", country="Pakistan", use_browser=False, use_ai=False,
+    )
+
+    assert result["social_links"]["facebook"] == "https://facebook.com/testcafe"
+    assert result["social_links"]["instagram"] == "https://instagram.com/testcafe"
+
+
+async def test_enrich_item_sets_lat_lon_from_geocoding(monkeypatch):
+    from app.services import geocoding_service, website_scraper_service
+
+    async def fake_scrape(url, country_code=None):
+        return {"email": "hello@brightsmile.pk"}
+
+    async def fake_geocode_business(address, city, country):
+        return {"lat": 24.86, "lon": 67.01, "display_name": "Karachi, Sindh, Pakistan"}
+
+    monkeypatch.setattr(website_scraper_service, "extract_contact_from_website", fake_scrape)
+    monkeypatch.setattr(geocoding_service, "geocode_business", fake_geocode_business)
+
+    result = await enrichment_pipeline.enrich_item(
+        {"name": "Bright Smile Dental", "website": "https://brightsmile.pk", "address": "Karachi"},
+        city="Karachi", country="Pakistan", use_browser=False, use_ai=False,
+    )
+
+    assert result["lat"] == 24.86
+    assert result["lon"] == 67.01
+    # The original address text is left alone — a geocoded display_name is
+    # often just a vague administrative-area name, not a more useful address.
+    assert result["address"] == "Karachi"
+
+
+async def test_enrich_item_geocoding_failure_does_not_break_enrichment(monkeypatch):
+    from app.services import geocoding_service, website_scraper_service
+
+    async def fake_scrape(url, country_code=None):
+        return {"email": "hello@brightsmile.pk"}
+
+    async def failing_geocode(*args, **kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(website_scraper_service, "extract_contact_from_website", fake_scrape)
+    monkeypatch.setattr(geocoding_service, "geocode_business", failing_geocode)
+
+    result = await enrichment_pipeline.enrich_item(
+        {"name": "Bright Smile Dental", "website": "https://brightsmile.pk", "address": "Karachi"},
+        city="Karachi", country="Pakistan", use_browser=False, use_ai=False,
+    )
+
+    assert result["enrichment_status"] == "done"
+    assert result.get("lat") is None
+
+
 # --- AI-filter enrich endpoint ------------------------------------------------
 
 

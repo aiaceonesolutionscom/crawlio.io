@@ -134,7 +134,7 @@ export function LeadDiscoveryModal({
   // Real progress isn't pushed from the backend (the search is one blocking
   // request), so this cycles honest, generically-true status text based on
   // elapsed time — better than a bare spinner for a search that can take
-  // anywhere from ~2s to ~20s depending on OpenStreetMap mirror load.
+  // anywhere from ~2s to ~20s depending on how many sources respond.
   useEffect(() => {
     if (!isSearching) {
       setSearchStage('');
@@ -142,14 +142,14 @@ export function LeadDiscoveryModal({
     }
     const stages = enhancedTier
       ? [
-          'Searching OpenStreetMap…',
+          'Searching the web for businesses…',
           'Searching business directories with AI…',
           'Checking business websites for contact info…',
           'Looking up social profiles with AI…',
           'Still working — some searches take a little longer…'
         ]
       : [
-          'Searching OpenStreetMap…',
+          'Searching the web for businesses…',
           'Checking business websites for contact info…',
           'Filtering out incomplete listings…',
           'Still working — some searches take a little longer…'
@@ -535,7 +535,7 @@ export function LeadDiscoveryModal({
 
                   {results.length > 0 && lastRequestedCount !== null && results.length < lastRequestedCount && (
                     <p className="border-b border-ink-800 bg-ink-850/40 px-4 py-2 text-[12px] text-chalk-faint">
-                      You asked for {lastRequestedCount}, but OpenStreetMap only has {results.length} real{' '}
+                      You asked for {lastRequestedCount}, but we only found {results.length} real{' '}
                       {niche.trim()} listings with contact info for this area — that's all of what exists there,
                       not a limit on our side.
                     </p>

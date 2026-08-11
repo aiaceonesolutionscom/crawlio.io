@@ -23,6 +23,8 @@ class DiscoveredLead(BaseModel):
     email: Optional[str] = None
     website: Optional[str] = None
     address: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
     industry: Optional[str] = None
     social_links: dict[str, str] = {}
     source: str = "web_search"

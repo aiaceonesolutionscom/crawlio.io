@@ -24,6 +24,7 @@ from app.services import (
     ai_extraction_service,
     browser_scraper_service,
     duckduckgo_service,
+    geocoding_service,
     tavily_service,
     website_scraper_service,
 )
@@ -175,18 +176,51 @@ async def enrich_item(
             _merge_socials(result, ai.get("social_links"))
             sources.append("ai")
 
-    # 5) Fill missing social profiles via Tavily + DuckDuckGo.
-    if use_ai and not (result.get("social_links") or {}):
-        socials: dict[str, str] = {}
+    # 5) Fill missing social profiles via Tavily + DuckDuckGo. Always attempted
+    #    for a website-less business — social media is often the ONLY contact
+    #    channel they have — regardless of tier. For a business that does have
+    #    a website, this stays a Pro-tier supplemental lookup. Both engines are
+    #    queried and merged (not "stop at the first one that returns
+    #    anything"), and a platform already found upstream is left alone
+    #    rather than causing the whole search to be skipped.
+    existing_socials = result.get("social_links") or {}
+    # find_social_links only ever recognizes up to 4 platforms, so "still
+    # missing something" is well-approximated by "found fewer than 4 so far."
+    should_search_socials = (not website and len(existing_socials) < 4) or (use_ai and not existing_socials)
+    if should_search_socials:
+        socials: dict[str, str] = dict(existing_socials)
         for social_fn in (tavily_service.find_social_links, duckduckgo_service.find_social_links):
             try:
-                socials = {**socials, **await social_fn(name, city, country)}
+                found = await social_fn(name, city, country)
             except Exception as exc:
                 logger.warning("Enrichment social lookup failed for %s: %s", name, exc)
-            if socials:
-                _merge_socials(result, socials)
-                sources.append("social")
-                break
+                continue
+            for platform, url in found.items():
+                socials.setdefault(platform, url)
+        if len(socials) > len(existing_socials):
+            _merge_socials(result, socials)
+            sources.append("social")
+
+    # 6) Resolve a real coordinate via OpenStreetMap/Nominatim — previously no
+    #    lat/lon was ever computed anywhere in this pipeline, so a lead's
+    #    location was whatever bare city-name string discovery guessed (or
+    #    nothing at all). Best-effort: a failed/empty geocode never blocks the
+    #    rest of enrichment.
+    try:
+        geocoded = await geocoding_service.geocode_business(result.get("address"), city, country)
+    except Exception as exc:
+        logger.warning("Geocoding failed for %s: %s", name, exc)
+        geocoded = None
+    if geocoded:
+        result["lat"] = geocoded["lat"]
+        result["lon"] = geocoded["lon"]
+        # Deliberately NOT overwriting result["address"] with Nominatim's
+        # display_name: at city-level (the common case, when no real street
+        # address was ever found) that's an administrative-area name like
+        # "Karachi Division, Sindh, Pakistan" — longer and less useful than
+        # the plain city name it would replace, not a more precise business
+        # address. Coordinates are still stored for map use either way.
+        sources.append("geocoding")
 
     result["social_links"] = result.get("social_links") or {}
     if result.get("website"):

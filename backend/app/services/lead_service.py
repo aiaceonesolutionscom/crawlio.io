@@ -149,6 +149,8 @@ async def create_lead(session: AsyncSession, workspace: Workspace, data: LeadCre
         phone=phone,
         website=data.website,
         address=data.address,
+        lat=data.lat,
+        lon=data.lon,
         industry=data.industry,
         source=data.source,
         lead_metadata=metadata or None,

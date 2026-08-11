@@ -9,6 +9,8 @@ export interface LeadDTO {
   phone: string | null;
   website: string | null;
   address: string | null;
+  lat: number | null;
+  lon: number | null;
   industry: string | null;
   score: number | null;
   status: LeadStatus;

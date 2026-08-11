@@ -114,3 +114,29 @@ def test_collect_emails_decodes_entity_obfuscation():
 def test_first_valid_email_entity_aware():
     html = 'Contact: sales&#64;acme.pk'
     assert ce.first_valid_email(html) == "sales@acme.pk"
+
+
+def test_bare_digit_phone_accepted_with_explicit_label():
+    """A compact footer often has no space between the label and the number
+    ("Call:03001234567") — this should now be accepted since the label makes
+    the digit run trustworthy, unlike a context-free cache-buster string."""
+    html = "Visit us today. Call:03001234567 for bookings."
+    assert ce.first_valid_phone(html) == "03001234567"
+
+
+def test_bare_digit_phone_still_rejected_without_context():
+    html = "cache-bust=1786024520697"
+    assert ce.first_valid_phone(html) is None
+
+
+def test_find_social_links_recognizes_whatsapp():
+    html = '<a href="https://wa.me/923001234567">Chat on WhatsApp</a>'
+    assert ce.find_social_links(html) == {"whatsapp": "https://wa.me/923001234567"}
+
+
+def test_xyz_domain_email_no_longer_auto_disposable():
+    """A .xyz business domain used to be treated as disposable by a blanket
+    TLD rule; it should now be scored on its own merits like any other
+    domain, not automatically discarded."""
+    html = "Contact us: hello@smallbiz.xyz"
+    assert ce.first_valid_email(html) == "hello@smallbiz.xyz"

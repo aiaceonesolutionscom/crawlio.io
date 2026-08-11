@@ -40,6 +40,16 @@ async def _scrape_urls(client: httpx.AsyncClient, urls: list[str]) -> list[str]:
     return pages
 
 
+async def _browser_fallback(target: str, country_code: Optional[str]) -> dict:
+    try:
+        from app.services import browser_scraper_service
+
+        return await browser_scraper_service.extract_contact_from_website(target, country_code)
+    except Exception as exc:
+        logger.info("Browser fallback failed for %s: %s", target, exc)
+        return {}
+
+
 async def extract_contact_from_website(
     url: str,
     country_code: Optional[str] = None,
@@ -59,7 +69,12 @@ async def extract_contact_from_website(
     ) as client:
         home_html = await _fetch_html(client, target)
         if not home_html:
-            return {}
+            # Plain HTTP got nothing back at all -- almost always a JS-only SPA
+            # (empty shell HTML), a bot-wall 403, or a slow/blocked host. This
+            # used to just give up here regardless of tier; now every tier gets
+            # one real-browser attempt as a reliability floor before we accept
+            # "no data" for a site that might just need JS to render.
+            return await _browser_fallback(target, country_code)
 
         sub_urls = discover_contact_urls(target, home_html, max_urls=max_pages)
         sub_pages = await _scrape_urls(client, sub_urls)

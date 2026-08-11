@@ -23,4 +23,4 @@ async def list_cities(
     country: str = Query(...),
     q: str = Query(...),
 ):
-    return {"items": await geo_service.search_cities(country, q)}
+    return {"items": geo_service.search_cities(country, q)}

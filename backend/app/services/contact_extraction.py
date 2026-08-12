@@ -1,5 +1,6 @@
 """Shared regex helpers for pulling email/phone/website out of free text or HTML,
-used by both the website-content scraper (all tiers) and Tavily enrichment (Pro+).
+used by the website-content scraper (plain HTTP for all tiers, headless browser
+for Pro+) and by the discovery crawlers' lead validation.
 
 Picking the *right* contact out of a page matters as much as finding one: rendered
 pages are full of boilerplate emails (theme authors, agency footers, "noreply"
@@ -11,6 +12,8 @@ import html as html_mod
 import re
 from typing import Optional
 from urllib.parse import unquote, urlparse
+
+from app.data.directory_domains import DIRECTORY_DOMAINS, DIRECTORY_MARKERS
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 PHONE_RE = re.compile(r"(?:\+\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?){2,4}\d{3,4}")
@@ -388,11 +391,31 @@ def extract_tel(html: str) -> Optional[str]:
     return candidate if _is_valid_phone_digits(candidate) else None
 
 
+_NOT_A_BUSINESS_SITE = NON_WEBSITE_DOMAINS | DIRECTORY_DOMAINS
+
+
 def is_own_website(url: str) -> bool:
     if not url:
         return False
     host = urlparse(url).netloc.lower().removeprefix("www.")
-    return bool(host) and not any(host == d or host.endswith("." + d) for d in NON_WEBSITE_DOMAINS)
+    if not host:
+        return False
+    if any(host == d or host.endswith("." + d) for d in _NOT_A_BUSINESS_SITE):
+        return False
+    if any(marker in host for marker in DIRECTORY_MARKERS):
+        return False
+    return True
+
+
+def clean_business_name(name: str) -> str:
+    """Businesses commonly stuff their Google Maps/web-search listing name with
+    keyword spam for local SEO, e.g. "Bhatti Dental Clinic | Best Dental Clinic
+    in Karachi | Female Dentist in Karachi". The pipe is a reliable signal for
+    this pattern (real business names essentially never contain a literal
+    "|"), so keep only the first segment — the actual name."""
+    if not name:
+        return name
+    return name.split("|", 1)[0].strip() or name.strip()
 
 
 def find_social_links(html: str) -> dict[str, str]:

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 from urllib.parse import urljoin
@@ -16,6 +17,11 @@ SCRAPE_HEADERS = {
 }
 # How many same-origin pages (homepage + discovered contact pages) to fetch max.
 MAX_PAGES_PER_SITE = 8
+# How many of those subpages to fetch at once -- they're the same origin, so a
+# handful in parallel is a normal browsing pattern, not a burst; this is what
+# actually cuts per-lead wall time instead of paying up to MAX_PAGES_PER_SITE
+# timeouts back to back.
+SUBPAGE_CONCURRENCY = 4
 
 
 async def _fetch_html(client: httpx.AsyncClient, url: str) -> str:
@@ -30,14 +36,17 @@ async def _fetch_html(client: httpx.AsyncClient, url: str) -> str:
 
 
 async def _scrape_urls(client: httpx.AsyncClient, urls: list[str]) -> list[str]:
-    """Fetch a list of same-origin URLs, returning their HTML in order. A dead
-    subpath is skipped silently; the homepage failing means the site is down."""
-    pages: list[str] = []
-    for url in urls[:MAX_PAGES_PER_SITE]:
-        html = await _fetch_html(client, url)
-        if html:
-            pages.append(html)
-    return pages
+    """Fetch a list of same-origin URLs concurrently (bounded), returning
+    whatever HTML came back, homepage-then-subpages order. A dead subpath is
+    skipped silently; the homepage failing means the site is down."""
+    semaphore = asyncio.Semaphore(SUBPAGE_CONCURRENCY)
+
+    async def _bounded(url: str) -> str:
+        async with semaphore:
+            return await _fetch_html(client, url)
+
+    htmls = await asyncio.gather(*(_bounded(url) for url in urls[:MAX_PAGES_PER_SITE]))
+    return [html for html in htmls if html]
 
 
 async def _browser_fallback(target: str, country_code: Optional[str]) -> dict:
@@ -50,36 +59,7 @@ async def _browser_fallback(target: str, country_code: Optional[str]) -> dict:
         return {}
 
 
-async def extract_contact_from_website(
-    url: str,
-    country_code: Optional[str] = None,
-    max_pages: int = MAX_PAGES_PER_SITE,
-) -> dict:
-    """Fetch a business's own website (homepage, then crawled contact/about
-    pages) and pull whatever contact info + social links are on them -- free, no
-    API key, and low-risk since it's a GET to public pages the business itself
-    put up (not scraping a search engine). Emails/phones are ranked, not just
-    first-match, and mailto/tel links + JSON-LD are preferred signals."""
-    target = normalize_website_url(url)
-    if not target:
-        return {}
-
-    async with httpx.AsyncClient(
-        timeout=SCRAPE_TIMEOUT, headers=SCRAPE_HEADERS, follow_redirects=True
-    ) as client:
-        home_html = await _fetch_html(client, target)
-        if not home_html:
-            # Plain HTTP got nothing back at all -- almost always a JS-only SPA
-            # (empty shell HTML), a bot-wall 403, or a slow/blocked host. This
-            # used to just give up here regardless of tier; now every tier gets
-            # one real-browser attempt as a reliability floor before we accept
-            # "no data" for a site that might just need JS to render.
-            return await _browser_fallback(target, country_code)
-
-        sub_urls = discover_contact_urls(target, home_html, max_urls=max_pages)
-        sub_pages = await _scrape_urls(client, sub_urls)
-        pages = [home_html, *sub_pages]
-
+def _aggregate(pages: list[str], target: str, country_code: Optional[str]) -> dict:
     result = aggregate_contacts(pages, website=target, country_code=country_code)
     return {
         "email": result.get("email"),
@@ -93,3 +73,63 @@ async def extract_contact_from_website(
         "phone_candidates": result.get("phone_candidates") or [],
         "page_text": result.get("page_text") or "",
     }
+
+
+async def fetch_plain(
+    url: str,
+    country_code: Optional[str] = None,
+    max_pages: int = MAX_PAGES_PER_SITE,
+) -> Optional[dict]:
+    """Phase 1 only: plain-HTTP homepage + subpages, no browser fallback.
+    Returns None when the homepage came back empty (JS-only SPA, bot-wall 403,
+    or a slow/blocked host) — the caller decides what to do about that (a
+    single-site browser attempt via extract_contact_from_website, or batching
+    many such URLs through one shared browser via enrichment_pipeline's batch
+    path, which is what actually matters when several leads in one search all
+    need it — one browser launch per lead is the dominant cost otherwise)."""
+    target = normalize_website_url(url)
+    if not target:
+        return None
+
+    async with httpx.AsyncClient(
+        timeout=SCRAPE_TIMEOUT, headers=SCRAPE_HEADERS, follow_redirects=True
+    ) as client:
+        home_html = await _fetch_html(client, target)
+        if not home_html:
+            return None
+
+        sub_urls = discover_contact_urls(target, home_html, max_urls=max_pages)
+        sub_pages = await _scrape_urls(client, sub_urls)
+        pages = [home_html, *sub_pages]
+
+    return _aggregate(pages, target, country_code)
+
+
+async def extract_contact_from_website(
+    url: str,
+    country_code: Optional[str] = None,
+    max_pages: int = MAX_PAGES_PER_SITE,
+) -> dict:
+    """Fetch a business's own website (homepage, then crawled contact/about
+    pages) and pull whatever contact info + social links are on them -- free, no
+    API key, and low-risk since it's a GET to public pages the business itself
+    put up (not scraping a search engine). Emails/phones are ranked, not just
+    first-match, and mailto/tel links + JSON-LD are preferred signals.
+
+    Single-site convenience wrapper around fetch_plain + a one-off browser
+    fallback; for enriching many leads at once, prefer
+    enrichment_pipeline.enrich_items_batch, which batches every fallback
+    through one shared browser instead of one launch per site."""
+    target = normalize_website_url(url)
+    if not target:
+        return {}
+
+    result = await fetch_plain(target, country_code, max_pages)
+    if result is not None:
+        return result
+
+    # Plain HTTP got nothing back at all. This used to just give up here
+    # regardless of tier; now every tier gets one real-browser attempt as a
+    # reliability floor before we accept "no data" for a site that might just
+    # need JS to render.
+    return await _browser_fallback(target, country_code)

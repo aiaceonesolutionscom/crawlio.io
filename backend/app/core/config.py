@@ -16,8 +16,43 @@ class Settings(BaseSettings):
     brevo_sender_email: str = "onboarding@crawlio.io"
     brevo_sender_name: str = "Crawlio"
     mistral_api_key: str = ""
-    tavily_api_key: str = ""
     redis_url: str = "redis://localhost:6379/0"
+
+    # Lead crawler (Google Maps + directories) — free, open-source discovery sources.
+    google_maps_max_results: int = 50
+    google_maps_headless: bool = True
+    google_maps_delay_seconds: float = 1.5
+    # Max place-detail pages visited per search — a safety ceiling below
+    # google_maps_max_results since each visit is a real navigation Google can
+    # fingerprint. Higher = closer to the requested lead count, at the cost of
+    # more requests per search; for volume beyond this, use proxy_url rather
+    # than raising it unbounded.
+    google_maps_search_limit: int = 20
+    # Optional proxy for the crawlers (anti-bot), e.g. "http://user:pass@host:port".
+    proxy_url: str = ""
+    directory_enabled: bool = True
+    # Email validation (MX lookup) — on, but can be disabled for offline test runs.
+    validate_emails: bool = True
+
+    # Optional, opt-in last-resort top-up when Google Maps + OSM + directories
+    # come up short (e.g. thinner markets outside major cities). Off by default:
+    # contributes name + website candidates only, never guessed contact info —
+    # see web_search_service.py for why that's safe.
+    tavily_api_key: str = ""
+    tavily_enabled: bool = False
+    tavily_max_results: int = 10
+
+    # Shared, global cache of validated discovery results per niche+city+country
+    # (not workspace-scoped) — repeat searches across every workspace reuse the
+    # same scrape instead of re-hitting Google Maps/OSM/directories each time.
+    discovery_cache_ttl_hours: int = 24
+    # Demand-driven background pre-warm crawler (Celery beat) — refreshes cache
+    # rows before they expire, spread gently across the day. Off by default:
+    # it needs Redis + a running worker + beat process, which isn't guaranteed
+    # in every environment; enable once that infra is actually up.
+    discovery_prewarm_enabled: bool = False
+    discovery_prewarm_interval_minutes: int = 10
+    discovery_prewarm_batch_size: int = 2
 
     google_client_id: str = ""
     google_client_secret: str = ""

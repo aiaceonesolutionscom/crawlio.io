@@ -1,3 +1,21 @@
+async def test_create_workspace_welcome_email_dispatch_failure_does_not_crash(authed_client, monkeypatch):
+    """Regression test: send_welcome_email_task.delay() used to be called with
+    no error handling -- a Redis outage must not stop workspace creation."""
+    from app.workers.tasks_email import send_welcome_email_task
+
+    def _raise(*args):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    monkeypatch.setattr(send_welcome_email_task, "delay", _raise)
+
+    resp = await authed_client.post(
+        "/api/v1/workspaces",
+        json={"name": "Acme Workspace", "owner_email": "owner@acme.com", "owner_name": "Owner"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "Acme Workspace"
+
+
 async def test_create_workspace_defaults_to_free(authed_client):
     resp = await authed_client.post("/api/v1/workspaces", json={"name": "Acme Workspace"})
     assert resp.status_code == 201

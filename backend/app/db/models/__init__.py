@@ -1,5 +1,6 @@
 from app.db.models.audit_log import AuditLog
 from app.db.models.crm import CrmEntry
+from app.db.models.discovery_cache import DiscoveryCache
 from app.db.models.email import EmailMessage
 from app.db.models.email_account import (
     DailyEmailQuota,
@@ -42,4 +43,5 @@ __all__ = [
     "FeatureFlagOverride",
     "SystemSetting",
     "AuditLog",
+    "DiscoveryCache",
 ]

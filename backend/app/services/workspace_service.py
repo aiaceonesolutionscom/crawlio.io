@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -21,6 +22,8 @@ from app.db.models.workspace import Workspace, WorkspaceMember
 from app.schemas.workspace import WorkspaceCreate
 from app.services import plan_config_service
 from app.workers.tasks_email import send_welcome_email_task
+
+logger = logging.getLogger(__name__)
 
 
 async def get_workspace_for_user(session: AsyncSession, user_id: str) -> Optional[Workspace]:
@@ -94,7 +97,10 @@ async def create_workspace(session: AsyncSession, user_id: str, data: WorkspaceC
     await session.refresh(workspace)
 
     if data.owner_email:
-        send_welcome_email_task.delay(data.owner_email, data.owner_name or "there", workspace.name)
+        try:
+            send_welcome_email_task.delay(data.owner_email, data.owner_name or "there", workspace.name)
+        except Exception as exc:
+            logger.warning("Could not dispatch welcome email for workspace %s: %s", workspace.id, exc)
 
     return workspace
 

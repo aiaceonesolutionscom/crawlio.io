@@ -103,7 +103,7 @@ export function deleteAllLeads(token: string | null) {
 }
 
 export function enrichLeads(token: string | null, leadIds: string[]) {
-  return apiFetch<{ enriched: number; unchanged: number }>('/api/v1/leads/enrich', token, {
+  return apiFetch<{ dispatched: number }>('/api/v1/leads/enrich', token, {
     method: 'POST',
     body: JSON.stringify({ lead_ids: leadIds })
   });

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +9,8 @@ from app.db.models.workspace import Workspace, WorkspaceMember
 from app.schemas.team import TeamEntryRead
 from app.services import quota_service
 from app.workers.tasks_email import send_invite_email_task
+
+logger = logging.getLogger(__name__)
 
 
 def _member_to_entry(member: WorkspaceMember) -> TeamEntryRead:
@@ -58,7 +62,10 @@ async def invite_member(session: AsyncSession, workspace: Workspace, email: str,
     await session.commit()
     await session.refresh(invitation)
 
-    send_invite_email_task.delay(email, workspace.name, role)
+    try:
+        send_invite_email_task.delay(email, workspace.name, role)
+    except Exception as exc:
+        logger.warning("Could not dispatch invite email for %s in workspace %s: %s", email, workspace.id, exc)
 
     return _invitation_to_entry(invitation)
 

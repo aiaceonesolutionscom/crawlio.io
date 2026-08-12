@@ -30,6 +30,34 @@ async def test_inbound_webhook_creates_lead_with_correct_token(client_factory, d
     assert names == ["Inbound Lead"]
 
 
+async def test_inbound_webhook_scoring_dispatch_failure_does_not_crash(client_factory, db_engine, monkeypatch):
+    """Regression test: score_lead_task.delay() used to be called with no error
+    handling here too -- a Redis outage must not stop the inbound webhook from
+    capturing the lead."""
+    def _raise(lead_id):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    monkeypatch.setattr(score_lead_task, "delay", _raise)
+
+    async with client_factory("user_hook_no_redis") as client:
+        created = await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        workspace_id = created.json()["id"]
+
+        session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with session_maker() as session:
+            result = await session.execute(select(Workspace).where(Workspace.id == workspace_id))
+            token = result.scalar_one().webhook_token
+
+        resp = await client.post(
+            f"/api/v1/webhooks/leads/{workspace_id}",
+            params={"token": token},
+            json={"name": "Inbound Lead", "email": "lead2@example.com"}
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "captured"
+
+
 async def test_inbound_webhook_rejects_wrong_token(client_factory):
     async with client_factory("user_hook2") as client:
         created = await client.post("/api/v1/workspaces", json={"name": "Acme"})

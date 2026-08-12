@@ -26,6 +26,9 @@ def _search_filter(query, search: str):
     return query.where(
         func.lower(Lead.name).like(like)
         | func.lower(Lead.email).like(like)
+        | func.lower(Lead.phone).like(like)
+        | func.lower(Lead.website).like(like)
+        | func.lower(Lead.address).like(like)
     )
 
 
@@ -127,6 +130,39 @@ async def _find_duplicate(
             return "phone"
 
     return None
+
+
+async def find_existing_emails_and_phones(
+    session: AsyncSession, workspace_id: str, emails: list[str], phones: list[str]
+) -> tuple[set[str], set[str]]:
+    """Batch version of _find_duplicate's matching rules (email
+    case-insensitive, phone whitespace-normalized) — one query per field, not
+    one query per candidate. Used to annotate a list of discovery results as
+    "already in this workspace's CRM" without querying per item."""
+    existing_emails: set[str] = set()
+    existing_phones: set[str] = set()
+
+    normalized_emails = {e.lower() for e in emails if e}
+    if normalized_emails:
+        result = await session.execute(
+            select(func.lower(Lead.email)).where(
+                Lead.workspace_id == workspace_id,
+                func.lower(Lead.email).in_(normalized_emails),
+            )
+        )
+        existing_emails = {e for e in result.scalars().all() if e}
+
+    normalized_phones = {re.sub(r"\s+", "", p) for p in phones if p}
+    if normalized_phones:
+        result = await session.execute(
+            select(Lead.phone).where(
+                Lead.workspace_id == workspace_id,
+                Lead.phone.in_(normalized_phones),
+            )
+        )
+        existing_phones = {p for p in result.scalars().all() if p}
+
+    return existing_emails, existing_phones
 
 
 async def create_lead(session: AsyncSession, workspace: Workspace, data: LeadCreate) -> Lead:

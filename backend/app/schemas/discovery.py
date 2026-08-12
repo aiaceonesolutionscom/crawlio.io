@@ -10,8 +10,7 @@ class DiscoverRequest(BaseModel):
     country: str  # ISO 3166-1 alpha-2 code, e.g. "PK"
     city: str
     # Kept for API backwards-compatibility with existing frontends that send
-    # coordinates — discovery is web-based now (Tavily + DuckDuckGo), so these
-    # are accepted and ignored.
+    # coordinates — discovery crawls by name, so these are accepted and ignored.
     lat: Optional[float] = None
     lon: Optional[float] = None
     limit: Optional[int] = None  # how many results the user wants; capped server-side by plan
@@ -27,7 +26,7 @@ class DiscoveredLead(BaseModel):
     lon: Optional[float] = None
     industry: Optional[str] = None
     social_links: dict[str, str] = {}
-    source: str = "web_search"
+    source: str = "google_maps"
     enrichment_status: Optional[str] = None
     enrichment_error: Optional[str] = None
     hours: Optional[str] = None
@@ -35,6 +34,20 @@ class DiscoveredLead(BaseModel):
     completeness: Optional[int] = None
     last_enriched_at: Optional[str] = None
     enrichment_source: Optional[str] = None
+    # Apify-style enrichment from Google Maps.
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    category: Optional[str] = None
+    plus_code: Optional[str] = None
+    # Cache/geo-fallback transparency — additive, defaults preserve old behavior.
+    cache_hit: bool = False
+    cached_at: Optional[str] = None
+    result_city: Optional[str] = None
+    is_fallback_city: bool = False
+    # True when this business (by email/phone) already exists as a Lead in the
+    # requesting workspace's CRM — lets a repeat search show what's actually
+    # new instead of looking like a frozen re-run of the same list.
+    already_in_workspace: bool = False
 
 
 class DiscoverResponse(BaseModel):

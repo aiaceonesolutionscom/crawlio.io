@@ -22,6 +22,26 @@ async def test_create_lead_enqueues_scoring(client_factory, monkeypatch):
     assert enqueued == [body["id"]]
 
 
+async def test_create_lead_scoring_dispatch_failure_does_not_crash(client_factory, monkeypatch):
+    """Regression test: score_lead_task.delay() used to be called with no error
+    handling, so a Redis/Celery outage crashed lead creation with a 500 whose
+    response never passed back through CORSMiddleware (browser reports a
+    misleading CORS error). Lead creation must succeed regardless."""
+    def _raise(lead_id):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    monkeypatch.setattr(score_lead_task, "delay", _raise)
+
+    async with client_factory("user_create_no_redis") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        resp = await client.post("/api/v1/leads", json={"name": "Amara Okafor"})
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Amara Okafor"
+    assert body["score"] is None
+
+
 async def test_leads_are_isolated_per_workspace(client_factory, monkeypatch):
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
 
@@ -53,6 +73,64 @@ async def test_lead_search_filters_by_name_and_email(client_factory, monkeypatch
 
         resp = await client.get("/api/v1/leads", params={"search": "loopretail"})
 
+    names = [item["name"] for item in resp.json()["items"]]
+    assert names == ["Priya Raman"]
+
+
+async def test_lead_search_filters_by_phone(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_search_phone") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        await client.post("/api/v1/leads", json={"name": "Priya Raman", "phone": "+923001234567"})
+        await client.post("/api/v1/leads", json={"name": "Tomas Ferreira", "phone": "+923009999999"})
+
+        resp = await client.get("/api/v1/leads", params={"search": "3001234567"})
+
+    names = [item["name"] for item in resp.json()["items"]]
+    assert names == ["Priya Raman"]
+
+
+async def test_lead_search_filters_by_website(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_search_website") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        await client.post("/api/v1/leads", json={"name": "Priya Raman", "website": "https://loopretail.com"})
+        await client.post("/api/v1/leads", json={"name": "Tomas Ferreira", "website": "https://cascadesolar.com"})
+
+        resp = await client.get("/api/v1/leads", params={"search": "loopretail"})
+
+    names = [item["name"] for item in resp.json()["items"]]
+    assert names == ["Priya Raman"]
+
+
+async def test_lead_search_filters_by_address(client_factory, monkeypatch):
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_search_address") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        await client.post("/api/v1/leads", json={"name": "Priya Raman", "address": "Gulshan-e-Iqbal, Karachi"})
+        await client.post("/api/v1/leads", json={"name": "Tomas Ferreira", "address": "Clifton, Karachi"})
+
+        resp = await client.get("/api/v1/leads", params={"search": "gulshan"})
+
+    names = [item["name"] for item in resp.json()["items"]]
+    assert names == ["Priya Raman"]
+
+
+async def test_lead_search_with_no_phone_website_address_is_safe(client_factory, monkeypatch):
+    """NULL phone/website/address columns must not break the search filter
+    (LOWER(NULL) LIKE x evaluates to NULL/false, not an error)."""
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    async with client_factory("user_search_null_fields") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        await client.post("/api/v1/leads", json={"name": "Priya Raman"})
+
+        resp = await client.get("/api/v1/leads", params={"search": "priya"})
+
+    assert resp.status_code == 200
     names = [item["name"] for item in resp.json()["items"]]
     assert names == ["Priya Raman"]
 
@@ -167,8 +245,22 @@ async def test_whatsapp_requires_pro_plan(client_factory, monkeypatch):
 
 async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch):
     from app.services import website_scraper_service
+    from app.services.crawlers import lead_validator
+    from app.workers.tasks_enrichment import enrich_lead
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+    # Real MX lookups are network-dependent (and example.com's null MX record
+    # makes this a coin flip under load) — this test only cares that a scraped
+    # email survives enrichment, not that DNS resolves in time.
+    monkeypatch.setattr(lead_validator, "_has_mx", lambda domain: True)
+
+    def _raise(lead_id):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    # /enrich dispatches to the background worker first; force the sync
+    # fallback path so this test can assert on the actual enrichment result
+    # without needing a real Celery worker.
+    monkeypatch.setattr(enrich_lead, "delay", _raise)
 
     async def fake_extract(url, country_code=None):
         return {"email": "found@example.com", "phone": "+15551234567", "social_links": {"facebook": "https://facebook.com/x"}}
@@ -184,7 +276,7 @@ async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch)
 
         resp = await client.post("/api/v1/leads/enrich", json={"lead_ids": [lead_id]})
         assert resp.status_code == 200
-        assert resp.json() == {"enriched": 1, "unchanged": 0}
+        assert resp.json() == {"dispatched": 1}
 
         updated = await client.get(f"/api/v1/leads/{lead_id}")
 
@@ -196,8 +288,14 @@ async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch)
 
 async def test_enrich_leads_does_not_overwrite_existing_data(client_factory, monkeypatch):
     from app.services import website_scraper_service
+    from app.workers.tasks_enrichment import enrich_lead
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    def _raise(lead_id):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    monkeypatch.setattr(enrich_lead, "delay", _raise)
 
     async def fake_extract(url, country_code=None):
         return {"email": "scraped@example.com", "phone": "+15559999999"}
@@ -213,9 +311,37 @@ async def test_enrich_leads_does_not_overwrite_existing_data(client_factory, mon
         lead_id = created.json()["id"]
 
         resp = await client.post("/api/v1/leads/enrich", json={"lead_ids": [lead_id]})
-        assert resp.json()["enriched"] == 1  # phone still got filled in
+        assert resp.json() == {"dispatched": 1}
 
         updated = await client.get(f"/api/v1/leads/{lead_id}")
 
     assert updated.json()["email"] == "real@example.com"  # untouched
     assert updated.json()["phone"] == "+15559999999"  # gap filled
+
+
+async def test_enrich_leads_dispatches_to_background_worker_when_available(client_factory, monkeypatch):
+    """When the worker IS reachable, /enrich should just dispatch — no
+    synchronous website scrape should happen in the request at all."""
+    from app.services import enrichment_pipeline
+    from app.workers.tasks_enrichment import enrich_lead
+
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    dispatched_ids = []
+    monkeypatch.setattr(enrich_lead, "delay", lambda lead_id: dispatched_ids.append(lead_id))
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("inline enrichment should not run when the worker dispatch succeeds")
+
+    monkeypatch.setattr(enrichment_pipeline, "enrich_item", fail_if_called)
+
+    async with client_factory("user_enrich_dispatch") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        created = await client.post("/api/v1/leads", json={"name": "No Contact Yet"})
+        lead_id = created.json()["id"]
+
+        resp = await client.post("/api/v1/leads/enrich", json={"lead_ids": [lead_id]})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"dispatched": 1}
+    assert dispatched_ids == [lead_id]

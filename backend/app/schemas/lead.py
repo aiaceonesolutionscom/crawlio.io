@@ -69,9 +69,8 @@ class LeadEnrichRequest(BaseModel):
     lead_ids: list[str]
 
 
-class LeadEnrichResult(BaseModel):
-    enriched: int
-    unchanged: int
+class LeadEnrichDispatchResult(BaseModel):
+    dispatched: int
 
 
 class LeadEmailResponse(BaseModel):

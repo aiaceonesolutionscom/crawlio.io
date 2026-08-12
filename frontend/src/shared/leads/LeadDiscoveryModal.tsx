@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckIcon, Loader2Icon, SearchIcon, SparklesIcon, XIcon } from 'lucide-react';
+import { CheckIcon, ClockIcon, Loader2Icon, MapPinIcon, SearchIcon, SparklesIcon, StarIcon, XIcon, ZapIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { cn } from '../utils/cn';
 import { searchCountries, searchCities, type CountryDTO, type CityDTO } from '../../lib/api/geo';
@@ -12,6 +12,12 @@ import {
   type DiscoveredLeadDTO
 } from '../../lib/api/discovery';
 import { ApiError } from '../../lib/api/client';
+
+const SOURCE_LABELS: Record<string, string> = {
+  google_maps: 'Google Maps',
+  openstreetmap: 'OpenStreetMap',
+  directory: 'Directory'
+};
 
 interface Props {
   open: boolean;
@@ -233,7 +239,10 @@ export function LeadDiscoveryModal({
       setEnhanced(res.enhanced);
       setDailyLimit(res.daily_limit);
       setRemainingToday(res.remaining_today);
-      setSelected(new Set(res.items.map((_, i) => i)));
+      // Pre-select only what's actually new — an already-in-CRM lead would
+      // just be silently skipped as a duplicate on import anyway, so leaving
+      // it checked by default makes a repeat search look like nothing changed.
+      setSelected(new Set(res.items.map((_, i) => i).filter((i) => !res.items[i].already_in_workspace)));
     } catch (err) {
       setSearchError(err instanceof ApiError ? err.message : 'Search failed. Please try again.');
       setResults([]);
@@ -561,17 +570,54 @@ export function LeadDiscoveryModal({
                             {selected.has(i) && <CheckIcon className="h-3 w-3" />}
                           </button>
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               <p className="truncate text-[13.5px] font-medium text-chalk">{r.name}</p>
                               {r.industry && (
                                 <span className="shrink-0 rounded-full border border-ink-700 px-2 py-0.5 text-[10.5px] text-chalk-faint">
                                   {r.industry}
                                 </span>
                               )}
+                              {r.rating != null && (
+                                <span className="flex shrink-0 items-center gap-1 text-[11px] text-chalk-dim">
+                                  <StarIcon className="h-3 w-3 fill-amber-400 text-amber-400" />
+                                  {r.rating.toFixed(1)}
+                                  {r.review_count != null && (
+                                    <span className="text-chalk-faint">({r.review_count})</span>
+                                  )}
+                                </span>
+                              )}
+                              {SOURCE_LABELS[r.source] && (
+                                <span className="shrink-0 rounded-full border border-ink-700 px-2 py-0.5 text-[10.5px] text-chalk-faint">
+                                  {SOURCE_LABELS[r.source]}
+                                </span>
+                              )}
+                              {r.cache_hit && (
+                                <span className="flex shrink-0 items-center gap-1 rounded-full border border-signal/40 px-2 py-0.5 text-[10.5px] text-signal">
+                                  <ZapIcon className="h-2.5 w-2.5" />
+                                  Cached
+                                </span>
+                              )}
+                              {r.is_fallback_city && r.result_city && (
+                                <span className="flex shrink-0 items-center gap-1 rounded-full border border-ink-700 px-2 py-0.5 text-[10.5px] text-chalk-faint">
+                                  <MapPinIcon className="h-2.5 w-2.5" />
+                                  Nearby: {r.result_city}
+                                </span>
+                              )}
+                              {r.already_in_workspace && (
+                                <span className="shrink-0 rounded-full border border-ink-700 px-2 py-0.5 text-[10.5px] text-chalk-faint">
+                                  Already in your CRM
+                                </span>
+                              )}
                             </div>
                             <p className="truncate text-[12px] text-chalk-faint">
                               {[r.address, r.phone, r.email].filter(Boolean).join(' · ') || 'No contact details found'}
                             </p>
+                            {r.hours && (
+                              <p className="mt-0.5 flex items-center gap-1 truncate text-[11.5px] text-chalk-faint">
+                                <ClockIcon className="h-3 w-3 shrink-0" />
+                                {r.hours}
+                              </p>
+                            )}
                             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                               {r.website && (
                                 <a

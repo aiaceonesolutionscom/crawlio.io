@@ -19,6 +19,40 @@ from app.main import app
 TEST_USER_ID = "user_test_fixed"
 TEST_ADMIN_EMAIL = "admin_test_fixed@crawlio.io"
 
+
+@pytest.fixture(autouse=True)
+def _reset_provider_circuit_breakers():
+    """Each crawler tracks a module-level circuit-breaker (tripped after a
+    block/failure streak, stays open for a real-time cooldown). Without resetting
+    it, one test tripping a breaker would leave it open for every test that runs
+    afterward in the same process, since the cooldown is measured in wall-clock
+    seconds."""
+    from app.services.crawlers import directory_scraper, maps_crawler
+
+    maps_crawler._breaker._blocked_until = 0.0
+    maps_crawler._breaker._consecutive_failures = 0
+    directory_scraper._breaker._blocked_until = 0.0
+    directory_scraper._breaker._consecutive_failures = 0
+    yield
+    maps_crawler._breaker._blocked_until = 0.0
+    maps_crawler._breaker._consecutive_failures = 0
+    directory_scraper._breaker._blocked_until = 0.0
+    directory_scraper._breaker._consecutive_failures = 0
+
+
+@pytest.fixture(autouse=True)
+def _reset_mx_cache():
+    """_MX_CACHE is a module-level dict so real MX lookups aren't repeated
+    within a process — but that means one test's real (or nearly-real, e.g. a
+    timeout under load) DNS result for a domain like example.com would
+    otherwise leak into every other test that validates an email on the same
+    domain, regardless of test order."""
+    from app.services.crawlers import lead_validator
+
+    lead_validator._MX_CACHE.clear()
+    yield
+    lead_validator._MX_CACHE.clear()
+
 # Mirrors the seed data inserted by migration f2a3b4c5d6e7 — workspace creation
 # looks these up by plan_key and 404s without them, so every test touching
 # workspaces/leads/etc. needs this present in the fixture DB too.

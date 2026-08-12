@@ -1,3 +1,15 @@
+import asyncio
+import sys
+
+# Playwright needs asyncio.create_subprocess_exec to launch Chromium, which only
+# works under Windows' ProactorEventLoop. Plain `python -m uvicorn` already
+# defaults there, but uvicorn's --reload supervisor on Windows can leave the
+# worker on SelectorEventLoop instead, silently breaking every browser-based
+# scrape (discovery/enrichment) with NotImplementedError. Force it explicitly
+# so this holds regardless of how the server is launched.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

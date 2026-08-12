@@ -1,13 +1,13 @@
 """Real-world lat/lon for a discovered business, via OpenStreetMap's free
 Nominatim geocoder — https://nominatim.org/release-docs/latest/api/Search/
 
-This is the ONLY place OpenStreetMap is used in the discovery pipeline now:
-business *discovery* itself stays Tavily + DuckDuckGo web search
-(discovery_service.py), since Overpass/Nominatim POI search was deliberately
-dropped there. This module exists purely to turn a resolved address (or, at
-worst, a city+country) into a real coordinate instead of the previous
-behavior of never geocoding at all (leads had no lat/lon, and an unknown city
-silently fell back to (0, 0) — see geo_service.py).
+Discovery itself now also queries OpenStreetMap directly via Overpass
+(overpass_service.py, one of the three parallel discovery sources alongside
+Google Maps and free business directories). This module is separate: it turns
+a resolved address (or, at worst, a city+country) into a real coordinate for
+leads that didn't already get lat/lon from their source, instead of the
+previous behavior of never geocoding at all (leads had no lat/lon, and an
+unknown city silently fell back to (0, 0) — see geo_service.py).
 
 Nominatim's usage policy (https://operations.osmfoundation.org/policies/nominatim/)
 requires: max 1 request/second, and a descriptive User-Agent identifying the

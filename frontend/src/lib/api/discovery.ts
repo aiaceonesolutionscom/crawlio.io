@@ -11,6 +11,17 @@ export interface DiscoveredLeadDTO {
   industry: string | null;
   social_links: Record<string, string>;
   source: string;
+  rating: number | null;
+  review_count: number | null;
+  category: string | null;
+  hours: string | null;
+  plus_code: string | null;
+  completeness: number | null;
+  cache_hit: boolean;
+  cached_at: string | null;
+  result_city: string | null;
+  is_fallback_city: boolean;
+  already_in_workspace: boolean;
 }
 
 export interface DiscoverParams {

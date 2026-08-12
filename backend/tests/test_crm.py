@@ -1,4 +1,40 @@
+from app.services import enrichment_pipeline
+from app.workers.tasks_enrichment import enrich_lead
 from app.workers.tasks_scoring import score_lead_task
+
+
+async def test_ai_filter_enrich_falls_back_to_inline_when_celery_unavailable(client_factory, monkeypatch):
+    """Regression test: enrich_lead.delay() used to be called with no error
+    handling in ai_filter_enrich, so a Redis/Celery outage crashed the request
+    with a 500 whose response never passed back through CORSMiddleware (the
+    browser reported this as a CORS error). Must fall back to running
+    enrichment synchronously in the request instead."""
+    monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
+
+    def _raise(lead_id):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    monkeypatch.setattr(enrich_lead, "delay", _raise)
+
+    async def fake_enrich_item(item, **kwargs):
+        return {"phone": "+15551234567", "enrichment_status": "done"}
+
+    monkeypatch.setattr(enrichment_pipeline, "enrich_item", fake_enrich_item)
+
+    async with client_factory("user_ai_filter_fallback") as client:
+        await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        ws = (await client.get("/api/v1/workspaces/me")).json()
+        await client.patch(f"/api/v1/workspaces/{ws['id']}/plan", json={"plan": "pro"})
+
+        created = await client.post("/api/v1/leads", json={"name": "No Contact"})
+        lead_id = created.json()["id"]
+
+        resp = await client.post("/api/v1/leads/ai-filter/enrich", json={"lead_ids": [lead_id]})
+        updated = await client.get(f"/api/v1/leads/{lead_id}")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"dispatched": 1}
+    assert updated.json()["phone"] == "+15551234567"
 
 
 async def test_ai_filter_splits_by_website(client_factory, monkeypatch):

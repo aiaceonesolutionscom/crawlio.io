@@ -103,6 +103,22 @@ export function LeadCenterPage({
           page: pageNum,
           limit: pageLimit
         });
+        const maxPage = Math.max(1, Math.ceil(res.total / pageLimit));
+        if (res.total > 0 && pageNum > maxPage) {
+          // Deleting leads (single/bulk/all) can leave the current page past
+          // the new last page — refetch the last valid page instead of
+          // showing an empty/stale one.
+          const retry = await listLeads(token, {
+            search: searchEnabled ? search : undefined,
+            page: maxPage,
+            limit: pageLimit
+          });
+          setLeads(retry.items);
+          setTotal(retry.total);
+          setPage(retry.page);
+          setSelectedIds(new Set());
+          return;
+        }
         setLeads(res.items);
         setTotal(res.total);
         setPage(res.page);
@@ -234,9 +250,8 @@ export function LeadCenterPage({
       const token = await getToken();
       const res = await enrichLeads(token, ids);
       setEnrichSummary(
-        `${res.enriched} lead${res.enriched === 1 ? '' : 's'} got new info, ${res.unchanged} had nothing new found.`
+        `${res.dispatched} lead${res.dispatched === 1 ? '' : 's'} queued for enrichment — refresh in a moment to see updates.`
       );
-      await refresh(searchEnabled ? query || undefined : undefined, page);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : 'Failed to enrich selected leads. Please try again.');
     } finally {
@@ -293,7 +308,7 @@ export function LeadCenterPage({
         title="Lead Center"
         description="Every captured lead, scored and ready to work. Actions run through your connected channels."
         action={
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
             {bulkExportEnabled &&
             <Button variant="outline" onClick={() => void handleExport()} disabled={isExporting}>
                 <DownloadIcon className="h-4 w-4" />
@@ -398,7 +413,7 @@ export function LeadCenterPage({
             onChange={(e) => searchEnabled && setQuery(e.target.value)}
             disabled={!searchEnabled}
             title={searchEnabled ? undefined : 'Upgrade to Pro to search leads'}
-            placeholder={searchEnabled ? 'Search name or email' : 'Search — upgrade to Pro'}
+            placeholder={searchEnabled ? 'Search name, email, phone, website…' : 'Search — upgrade to Pro'}
             className="h-11 w-full rounded-lg border border-ink-700 bg-ink-900 pl-10 pr-3.5 text-[14px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none disabled:cursor-not-allowed disabled:opacity-55" />
 
         </div>

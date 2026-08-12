@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -12,6 +13,8 @@ from app.schemas.automation import InboundLeadCapture
 from app.schemas.lead import LeadCreate
 from app.services import lead_service
 from app.workers.tasks_scoring import score_lead_task
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -41,7 +44,10 @@ async def capture_inbound_lead(
             source=payload.source
         )
     )
-    score_lead_task.delay(lead.id)
+    try:
+        score_lead_task.delay(lead.id)
+    except Exception as exc:
+        logger.warning("Could not dispatch scoring for webhook lead %s: %s", lead.id, exc)
     return {"id": lead.id, "status": "captured"}
 
 

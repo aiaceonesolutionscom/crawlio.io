@@ -6,14 +6,14 @@ from sqlalchemy import select
 
 from app.db.models.lead import Lead
 from app.db.session import async_session_maker
-from app.services import enrichment_jobs, enrichment_pipeline, lead_service
+from app.services import discovery_cache_service, enrichment_jobs, enrichment_pipeline, lead_service
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 # How many discovered leads are enriched concurrently in one batch. Scraping is
 # the heavy part (Playwright already caps at 6 pages anyway), so this just keeps
-# memory/Tavily bursts bounded.
+# memory/concurrent-scrape bursts bounded.
 BATCH_CONCURRENCY = 6
 
 
@@ -26,10 +26,11 @@ def enrich_discovered_batch(
     country_code: str = "",
     use_browser: bool = True,
     use_ai: bool = True,
+    use_google_maps: bool = False,
 ) -> None:
     try:
         asyncio.run(
-            _enrich_batch_async(search_id, city, country, country_code, use_browser, use_ai)
+            _enrich_batch_async(search_id, city, country, country_code, use_browser, use_ai, use_google_maps)
         )
     except Exception as exc:
         logger.exception("Batch enrichment failed for job %s", search_id)
@@ -37,7 +38,13 @@ def enrich_discovered_batch(
 
 
 async def _enrich_batch_async(
-    search_id: str, city: str, country: str, country_code: str, use_browser: bool, use_ai: bool
+    search_id: str,
+    city: str,
+    country: str,
+    country_code: str,
+    use_browser: bool,
+    use_ai: bool,
+    use_google_maps: bool = False,
 ) -> None:
     job = await enrichment_jobs.get_enrichment_job(search_id)
     if not job:
@@ -58,6 +65,7 @@ async def _enrich_batch_async(
                     country_code=country_code or None,
                     use_browser=use_browser,
                     use_ai=use_ai,
+                    use_google_maps=use_google_maps,
                 )
                 enriched["enrichment_status"] = enriched.get("enrichment_status") or "done"
                 await enrichment_jobs.update_item(search_id, index, enriched, lock=lock)
@@ -71,6 +79,19 @@ async def _enrich_batch_async(
                 )
 
     await asyncio.gather(*(_work(i, item) for i, item in enumerate(items)))
+
+    # Refresh the discovery cache now that these leads have their real
+    # website-scraped email/social data — cache readers before this point only
+    # saw the faster, phone/address-only snapshot written at request time.
+    final_job = await enrichment_jobs.get_enrichment_job(search_id)
+    niche = (final_job or {}).get("meta", {}).get("niche")
+    if final_job and niche:
+        async with async_session_maker() as session:
+            await discovery_cache_service.upsert_cache(
+                session, niche, city, country_code or "",
+                niche_display=niche, city_display=city, country_display=country,
+                items=final_job.get("items", []),
+            )
 
 
 @celery_app.task(name="enrich_lead", bind=True, max_retries=2)
@@ -114,6 +135,7 @@ async def _enrich_lead_async(lead_id: str, city: str, country: str, country_code
             country_code=country_code or None,
             use_browser=True,
             use_ai=True,
+            use_google_maps=True,
         )
 
         lead_service.apply_enrichment_to_lead(lead, enriched)

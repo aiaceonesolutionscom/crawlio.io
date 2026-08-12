@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -12,8 +13,8 @@ from app.schemas.crm import AiFilterResponse
 from app.schemas.lead import (
     LeadCreate,
     LeadEmailResponse,
+    LeadEnrichDispatchResult,
     LeadEnrichRequest,
-    LeadEnrichResult,
     LeadListResponse,
     LeadRead,
     LeadUpdate,
@@ -25,11 +26,13 @@ from app.services.lead_service import DuplicateLeadError
 from app.workers.tasks_enrichment import enrich_lead
 from app.workers.tasks_scoring import score_lead_task
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/leads", tags=["leads"])
 
 # How many selected leads get a per-lead enrichment pass in one request —
 # bounded so a large bulk selection can't turn into dozens of concurrent
-# outbound HTTP calls (website fetches, and Tavily searches for Pro+).
+# outbound HTTP calls (one website fetch per lead).
 MAX_ENRICH_PER_REQUEST = 30
 
 
@@ -93,7 +96,7 @@ async def ai_filter_leads(
     )
 
 
-@router.post("/enrich", response_model=LeadEnrichResult)
+@router.post("/enrich", response_model=LeadEnrichDispatchResult)
 async def enrich_leads(
     payload: LeadEnrichRequest,
     workspace: Annotated[Workspace, Depends(get_current_workspace)],
@@ -102,54 +105,67 @@ async def enrich_leads(
     """Re-run full enrichment on leads that already exist — useful for leads
     that were added manually, imported incomplete, or missed contact info the
     first time. Never overwrites data that's already there, only fills gaps and
-    adds richer profile fields (hours/description/socials). Pro+ runs the full
-    headless-browser + Tavily + AI pipeline; free tier gets the free website
-    scrape."""
+    adds richer profile fields (hours/description/socials).
+
+    Tries to dispatch each lead to the background worker first (fast,
+    non-blocking, matching /ai-filter/enrich); if the worker isn't reachable
+    (Redis down), falls back to running the same enrichment pipeline
+    synchronously in this request instead of losing the work. The response is
+    a "dispatched" count, not a completed-enrichment count — the client is
+    expected to refresh after a short wait to see the results, same as
+    /ai-filter/enrich."""
     lead_ids = payload.lead_ids[:MAX_ENRICH_PER_REQUEST]
     leads = await lead_service.get_leads_by_ids(session, workspace.id, lead_ids)
     enhanced = "lead_discovery_enhanced" in PLAN_CAPABILITIES.get(workspace.plan, set())
 
-    semaphore = asyncio.Semaphore(4)
+    fallback_leads = []
+    for lead in leads:
+        try:
+            enrich_lead.delay(lead.id)
+        except Exception as exc:
+            logger.warning("Could not dispatch background enrichment for lead %s: %s", lead.id, exc)
+            fallback_leads.append(lead)
 
-    async def _enrich_one(lead) -> dict:
-        async with semaphore:
+    if fallback_leads:
+        semaphore = asyncio.Semaphore(4)
+
+        async def _enrich_one(lead) -> dict:
+            async with semaphore:
+                metadata = dict(lead.lead_metadata or {})
+                item = {
+                    "name": lead.name,
+                    "phone": lead.phone,
+                    "email": lead.email,
+                    "website": lead.website,
+                    "address": lead.address or metadata.get("address"),
+                    "social_links": metadata.get("social_links") or {},
+                }
+                return await enrichment_pipeline.enrich_item(
+                    item,
+                    city=lead.address or "",
+                    country="",
+                    country_code=None,
+                    use_browser=enhanced,
+                    use_ai=enhanced,
+                    use_google_maps=enhanced,
+                )
+
+        outcomes = await asyncio.gather(*(_enrich_one(lead) for lead in fallback_leads), return_exceptions=True)
+        for lead, outcome in zip(fallback_leads, outcomes):
+            if not isinstance(outcome, dict) or not outcome:
+                continue
+            lead_service.apply_enrichment_to_lead(lead, outcome)
             metadata = dict(lead.lead_metadata or {})
-            item = {
-                "name": lead.name,
-                "phone": lead.phone,
-                "email": lead.email,
-                "website": lead.website,
-                "address": lead.address or metadata.get("address"),
-                "social_links": metadata.get("social_links") or {},
-            }
-            return await enrichment_pipeline.enrich_item(
-                item,
-                city=lead.address or "",
-                country="",
-                country_code=None,
-                use_browser=enhanced,
-                use_ai=enhanced,
-            )
+            if outcome.get("address"):
+                lead.address = lead.address or outcome["address"]
+            for key in ("description", "hours", "completeness", "enrichment_source", "last_enriched_at"):
+                if outcome.get(key):
+                    metadata[key] = outcome[key]
+            metadata["enrichment_status"] = outcome.get("enrichment_status") or "done"
+            lead.lead_metadata = metadata or None
+        await session.commit()
 
-    outcomes = await asyncio.gather(*(_enrich_one(lead) for lead in leads), return_exceptions=True)
-
-    enriched_count = 0
-    for lead, outcome in zip(leads, outcomes):
-        if not isinstance(outcome, dict) or not outcome:
-            continue
-        if lead_service.apply_enrichment_to_lead(lead, outcome):
-            enriched_count += 1
-        metadata = dict(lead.lead_metadata or {})
-        if outcome.get("address"):
-            lead.address = lead.address or outcome["address"]
-        for key in ("description", "hours", "completeness", "enrichment_source", "last_enriched_at"):
-            if outcome.get(key):
-                metadata[key] = outcome[key]
-        metadata["enrichment_status"] = outcome.get("enrichment_status") or "done"
-        lead.lead_metadata = metadata or None
-    await session.commit()
-
-    return LeadEnrichResult(enriched=enriched_count, unchanged=len(leads) - enriched_count)
+    return LeadEnrichDispatchResult(dispatched=len(leads))
 
 
 @router.post("/ai-filter/enrich")
@@ -158,13 +174,63 @@ async def ai_filter_enrich(
     workspace: Annotated[Workspace, Depends(require_plan("ai_lead_filter"))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
-    """Enrich leads from the "Filter your leads" view in the background. Each
-    selected lead gets the full pipeline (website scrape + Tavily + AI); the
-    frontend refreshes the filter shortly after to pick up the enriched data."""
+    """Enrich leads from the "Filter your leads" view. Tries to dispatch each
+    lead to the background worker first (fast, non-blocking); if the worker
+    isn't reachable (Redis down), falls back to running the same enrichment
+    pipeline synchronously in this request instead of losing the work — the
+    "dispatched" count means "queued or completed", either way real work
+    happened rather than a silent no-op, and the frontend's existing
+    "refresh to see updates" messaging stays accurate either way."""
     lead_ids = payload.lead_ids[:MAX_ENRICH_PER_REQUEST]
     leads = await lead_service.get_leads_by_ids(session, workspace.id, lead_ids)
+    enhanced = "lead_discovery_enhanced" in PLAN_CAPABILITIES.get(workspace.plan, set())
+
+    fallback_leads = []
     for lead in leads:
-        enrich_lead.delay(lead.id)
+        try:
+            enrich_lead.delay(lead.id)
+        except Exception as exc:
+            logger.warning("Could not dispatch background enrichment for lead %s: %s", lead.id, exc)
+            fallback_leads.append(lead)
+
+    if fallback_leads:
+        semaphore = asyncio.Semaphore(4)
+
+        async def _enrich_one(lead) -> dict:
+            async with semaphore:
+                metadata = dict(lead.lead_metadata or {})
+                item = {
+                    "name": lead.name,
+                    "phone": lead.phone,
+                    "email": lead.email,
+                    "website": lead.website,
+                    "address": lead.address or metadata.get("address"),
+                    "social_links": metadata.get("social_links") or {},
+                }
+                return await enrichment_pipeline.enrich_item(
+                    item,
+                    city=lead.address or "",
+                    country="",
+                    country_code=None,
+                    use_browser=enhanced,
+                    use_ai=enhanced,
+                )
+
+        outcomes = await asyncio.gather(*(_enrich_one(lead) for lead in fallback_leads), return_exceptions=True)
+        for lead, outcome in zip(fallback_leads, outcomes):
+            if not isinstance(outcome, dict) or not outcome:
+                continue
+            lead_service.apply_enrichment_to_lead(lead, outcome)
+            metadata = dict(lead.lead_metadata or {})
+            if outcome.get("address"):
+                lead.address = lead.address or outcome["address"]
+            for key in ("description", "hours", "completeness", "enrichment_source", "last_enriched_at"):
+                if outcome.get(key):
+                    metadata[key] = outcome[key]
+            metadata["enrichment_status"] = outcome.get("enrichment_status") or "done"
+            lead.lead_metadata = metadata or None
+        await session.commit()
+
     return {"dispatched": len(leads)}
 
 
@@ -178,7 +244,13 @@ async def create_lead(
         lead = await lead_service.create_lead(session, workspace, payload)
     except DuplicateLeadError as exc:
         raise _duplicate_error(exc.field) from exc
-    score_lead_task.delay(lead.id)
+    try:
+        score_lead_task.delay(lead.id)
+    except Exception as exc:
+        # Scoring is a background nice-to-have (score stays None, an already
+        # supported state) -- a queuing failure must never take down lead
+        # creation itself.
+        logger.warning("Could not dispatch scoring for lead %s: %s", lead.id, exc)
     return lead_to_read(lead)
 
 

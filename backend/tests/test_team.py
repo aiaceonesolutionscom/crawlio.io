@@ -36,6 +36,26 @@ async def test_invite_member_creates_pending_entry(client_factory, monkeypatch):
     assert any(item["status"] == "Active" for item in items)
 
 
+async def test_invite_member_email_dispatch_failure_does_not_crash(client_factory, monkeypatch):
+    """Regression test: send_invite_email_task.delay() used to be called with
+    no error handling -- a Redis outage must not stop a team invite from
+    being created."""
+    def _raise(*args):
+        raise Exception("Error 10061 connecting to localhost:6379")
+
+    monkeypatch.setattr(send_invite_email_task, "delay", _raise)
+
+    async with client_factory("user_team_owner_no_redis") as client:
+        created = await client.post("/api/v1/workspaces", json={"name": "Acme"})
+        workspace_id = created.json()["id"]
+        await client.patch(f"/api/v1/workspaces/{workspace_id}/plan", json={"plan": "pro"})
+
+        resp = await client.post("/api/v1/team/invites", json={"email": "new2@acme.com", "role": "Member"})
+
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "Invited"
+
+
 async def test_invite_enforces_seat_quota(client_factory, db_engine, monkeypatch):
     monkeypatch.setattr(send_invite_email_task, "delay", lambda *args: None)
 

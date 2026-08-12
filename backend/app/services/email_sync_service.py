@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -10,6 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.models.email_account import EmailAccount
 from app.services import email_account_service
+
+# In-memory message-id list cache so paging Prev/Next doesn't re-walk Gmail.
+_LIST_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_LIST_CACHE_TTL = 30.0
+
+
+def _list_cache_key(account_id: str, query: str) -> str:
+    return f"{account_id}:{query}"
 
 
 async def get_valid_access_token(account: EmailAccount) -> str:
@@ -27,41 +36,64 @@ async def get_valid_access_token(account: EmailAccount) -> str:
     return account.access_token
 
 
+async def _load_ids(
+    client: httpx.AsyncClient,
+    access_token: str,
+    query: str,
+    page: int,
+    page_size: int,
+    max_total: int,
+    cache_key: str,
+) -> list[dict]:
+    """Walk the Google list endpoint (up to max_total ids), cached per
+    (account, query) for _LIST_CACHE_TTL seconds so paging stays fast."""
+    now = time.monotonic()
+    if cache_key:
+        cached = _LIST_CACHE.get(cache_key)
+        if cached and now - cached[0] < _LIST_CACHE_TTL:
+            return list(cached[1])
+
+    ids: list[dict] = []
+    next_token: Optional[str] = None
+    while len(ids) < min(page * page_size, max_total):
+        params = {"q": query, "maxResults": 200}
+        if next_token:
+            params["pageToken"] = next_token
+        list_resp = await client.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params=params,
+        )
+        list_resp.raise_for_status()
+        data = list_resp.json()
+        batch = data.get("messages", [])
+        if not batch:
+            break
+        ids.extend(batch)
+        next_token = data.get("nextPageToken")
+        if not next_token:
+            break
+
+    if cache_key:
+        _LIST_CACHE[cache_key] = (time.monotonic(), list(ids))
+    return ids
+
+
 async def get_gmail_messages(
     access_token: str,
     query: str = "in:inbox",
     page: int = 1,
     page_size: int = 10,
     max_total: int = 500,
+    cache_key: str = "",
 ) -> tuple[list[dict], bool]:
     """Fetch a page of Gmail messages (metadata only) with stable pagination.
 
     The list endpoint is walked internally (up to ``max_total`` ids), then only
     the current page's messages are detail-fetched so each page stays fast.
     Returns (items, has_more)."""
-    ids: list[dict] = []
-    next_token: Optional[str] = None
-
     async with httpx.AsyncClient(timeout=30.0) as client:
-        while len(ids) < min(page * page_size, max_total):
-            params = {"q": query, "maxResults": 200}
-            if next_token:
-                params["pageToken"] = next_token
-            list_resp = await client.get(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                headers={"Authorization": f"Bearer {access_token}"},
-                params=params,
-            )
-            list_resp.raise_for_status()
-            data = list_resp.json()
-            batch = data.get("messages", [])
-            if not batch:
-                break
-            ids.extend(batch)
-            next_token = data.get("nextPageToken")
-            if not next_token:
-                break
-
+        ids = await _load_ids(client, access_token, query, page, page_size, max_total, cache_key)
         total = len(ids)
         start = (page - 1) * page_size
         page_ids = ids[start:start + page_size]
@@ -165,7 +197,7 @@ async def sync_inbox(
 ) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:inbox", page=page, page_size=page_size, max_total=max_total)
+        return await get_gmail_messages(access_token, "in:inbox", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
 
 
@@ -174,7 +206,7 @@ async def sync_sent(
 ) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:sent", page=page, page_size=page_size, max_total=max_total)
+        return await get_gmail_messages(access_token, "in:sent", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
 
 
@@ -183,7 +215,7 @@ async def sync_trash(
 ) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:trash", page=page, page_size=page_size, max_total=max_total)
+        return await get_gmail_messages(access_token, "in:trash", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
 
 
@@ -192,7 +224,7 @@ async def sync_spam(
 ) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:spam", page=page, page_size=page_size, max_total=max_total)
+        return await get_gmail_messages(access_token, "in:spam", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
 
 

@@ -170,12 +170,18 @@ async def initialize_agent_session(
 async def get_agent_conversation_history(
     session: AsyncSession, conversation_id: str
 ) -> list[EmailConversationMessage]:
+    from sqlalchemy import func as sa_func
+    from app.services.email_conversation_service import clean_message_content
+
     result = await session.execute(
         select(EmailConversationMessage)
         .where(EmailConversationMessage.conversation_id == conversation_id)
-        .order_by(EmailConversationMessage.created_at)
+        .order_by(sa_func.coalesce(EmailConversationMessage.sent_at, EmailConversationMessage.created_at))
     )
-    return list(result.scalars().all())
+    messages = list(result.scalars().all())
+    for msg in messages:
+        msg.content = clean_message_content(msg.content)
+    return messages
 
 
 async def agent_collect_business_info(
@@ -398,6 +404,7 @@ async def auto_respond_to_conversation(
     pushed to the workspace's WebSocket channel in real time."""
     from app.services import email_sync_service, meeting_service, agent_realtime
     from app.services.business_profile_service import get_profile, to_context
+    from app.services.email_conversation_service import clean_message_content
     from app.db.models.email_account import EmailAccount
     from datetime import datetime, timezone
 
@@ -472,7 +479,7 @@ async def auto_respond_to_conversation(
     subject = result.get("subject", f"Re: {conversation.subject}")
     if "Re:" not in subject:
         subject = f"Re: {conversation.subject}"
-    body = result.get("body", "")
+    body = clean_message_content(result.get("body", ""))
     interested = bool(result.get("interested"))
 
     # STOP guard #2: only send if the agent is still enabled right now.
@@ -636,6 +643,9 @@ async def _store_inbound_message(
     return True
 
 
+inbound_scan_guard: dict[str, datetime] = {}
+
+
 async def process_inbound_replies_for_account(
     session: AsyncSession, account_id: str
 ) -> dict:
@@ -651,8 +661,15 @@ async def process_inbound_replies_for_account(
          and append the outbound message to the same conversation.
     """
     from app.services import email_sync_service
-    from app.services.email_conversation_service import _extract_name, find_or_create_conversation, strip_email_quotes
+    from app.services.email_conversation_service import _extract_name, clean_message_content, find_or_create_conversation, strip_email_quotes
     from app.db.models.email_account import EmailAccount
+
+    # Cooldown: don't re-scan the same mailbox back-to-back (it hammers Gmail).
+    now = datetime.now(timezone.utc)
+    last = _inbound_scan_guard.get(account_id)
+    if last and (now - last).total_seconds() < 25:
+        return {"processed": 0, "results": [], "reason": "cooldown"}
+    _inbound_scan_guard[account_id] = now
 
     account_result = await session.execute(
         select(EmailAccount).where(EmailAccount.id == account_id)
@@ -661,7 +678,7 @@ async def process_inbound_replies_for_account(
     if not account:
         raise RuntimeError("Email account not found")
 
-    inbox, _ = await email_sync_service.sync_inbox(session, account, page=1, page_size=200, max_total=200)
+    inbox, _ = await email_sync_service.sync_inbox(session, account, page=1, page_size=20, max_total=20)
 
     account_email = (account.email_address or "").lower()
     processed: list[dict] = []

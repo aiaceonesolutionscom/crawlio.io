@@ -1,3 +1,4 @@
+import html as html_module
 import json
 import re
 import uuid
@@ -30,30 +31,76 @@ def _extract_name(raw: str) -> str:
     return ""
 
 
+def _collapse_ws(text: str) -> str:
+    """Trim whitespace per line and collapse runs of blank lines to one."""
+    out: list[str] = []
+    blanks = 0
+    for line in (text or "").splitlines():
+        line = line.replace("\xa0", " ").replace("\r", "").strip()
+        if not line:
+            blanks += 1
+            if blanks <= 1:
+                out.append("")
+            continue
+        blanks = 0
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def clean_message_content(text: str) -> str:
+    """Normalize a conversation message into clean plain chat text:
+    strip HTML, decode entities, remove markdown emphasis/bullets and collapse whitespace."""
+    if not text:
+        return ""
+    t = text
+    t = re.split(r"(?i)<blockquote", t)[0]
+    t = re.sub(r"<br\s*/?>", "\n", t, flags=re.IGNORECASE)
+    t = re.sub(r"</p\s*>", "\n", t, flags=re.IGNORECASE)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = html_module.unescape(t)
+    t = re.sub(r"\*\*(.+?)\*\*", r"\1", t)
+    t = re.sub(r"`(?!#)([^`]+?)`", r"\1", t)
+    t = re.sub(r"(?m)^\s*#{1,6}\s*", "", t)
+    t = re.sub(r"(?m)^\s*(?:[-*•]|\d+\.)\s+", "", t)
+    return _collapse_ws(t)
+
+
 def strip_email_quotes(body: str) -> str:
     """Reduce an inbound email to the customer's actual new message by removing
-    quoted reply chains ('On ... wrote:', '>' prefixed lines, separators)."""
+    quoted reply chains ('On ... wrote:', '-----Original Message-----', forwarded
+    headers, '>' prefixed lines, HTML blockquotes and separators)."""
     if not body:
         return ""
     text = body
+    # HTML blockquote = the quoted previous thread — cut everything from it on.
+    text = re.split(r"(?i)<blockquote", text, maxsplit=1)[0]
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</p\s*>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
+    text = html_module.unescape(text)
 
-    cleaned = re.split(r"\n\s*On\s+[^\n]*wrote:\s*\n?", text, maxsplit=1, flags=re.IGNORECASE)[0]
-    cleaned = re.split(r"\n\s*[-_]{3,}\s*\n", cleaned, maxsplit=1)[0]
-    cleaned = re.split(
-        r"\n\s*(From|To|Sent|Subject|Date|Reply-To|Return-Path|Message-ID):\s+\S",
-        cleaned, maxsplit=1, flags=re.IGNORECASE,
-    )[0]
-
-    lines = [
-        line.rstrip()
-        for line in cleaned.splitlines()
-        if not line.strip().startswith(">")
+    cut_patterns = [
+        # Gmail-style "On Tue, Aug 11, 2026 at 9:08 PM Ai AceOne <a@b.c> wrote:"
+        re.compile(r"(?i)\n\s*On\b[^\n]*?wrote\s*:?\s*\n?"),
+        # Outlook "-----Original Message-----" / "-----Reply Message-----"
+        re.compile(r"(?i)\n\s*[-_]{3,}\s*\n?\s*(Original Message|Reply Message)\s*[-_]{3,}"),
+        # separator lines
+        re.compile(r"\n\s*[-_]{4,}\s*\n"),
+        # forwarded email headers
+        re.compile(
+            r"(?i)\n\s*(From|To|Sent|Cc|Bcc|Subject|Date|Reply-To|Return-Path|Message-ID|MIME-Version|Content-Type|Delivered-To):\s*\S"
+        ),
+        # quoted lines
+        re.compile(r"\n\s*>"),
     ]
-    result = "\n".join(lines).strip()
-    return result or cleaned.strip() or text.strip()[:2000]
+    for pat in cut_patterns:
+        m = pat.search(text)
+        if m is not None:
+            text = text[: m.start()]
+            break
+
+    cleaned = _collapse_ws(text)
+    return cleaned or body[:2000]
 
 
 async def find_or_create_conversation(
@@ -479,3 +526,45 @@ async def get_active_conversations(
         ).order_by(EmailConversation.updated_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def list_conversation_previews(
+    session: AsyncSession, account_id: str, page: int = 1, page_size: int = 10
+) -> tuple[list[dict], int, bool]:
+    """WhatsApp-style Inbox preview: ONE row per customer (conversation),
+    showing only the latest normalized actual message + timestamp, ordered
+    by the latest message's real timestamp (not creation/thread time)."""
+    from sqlalchemy import func as sa_func
+
+    conv_result = await session.execute(
+        select(EmailConversation).where(
+            EmailConversation.email_account_id == account_id
+        ).order_by(EmailConversation.updated_at.desc())
+    )
+    all_convs = list(conv_result.scalars().all())
+    total = len(all_convs)
+
+    start = (page - 1) * page_size
+    page_convs = all_convs[start:start + page_size]
+
+    items: list[dict] = []
+    for conv in page_convs:
+        msg_result = await session.execute(
+            select(EmailConversationMessage)
+            .where(EmailConversationMessage.conversation_id == conv.id)
+            .order_by(sa_func.coalesce(EmailConversationMessage.sent_at, EmailConversationMessage.created_at))
+        )
+        msgs = list(msg_result.scalars().all())
+        last = msgs[-1] if msgs else None
+        items.append({
+            "id": conv.id,
+            "customer_name": conv.customer_name or conv.customer_email,
+            "customer_email": conv.customer_email,
+            "last_message": clean_message_content(last.content) if last else "",
+            "last_message_sender_type": last.sender_type if last else "",
+            "last_message_at": (last.sent_at or last.created_at) if last else conv.updated_at,
+            "ai_agent_active": conv.ai_agent_active,
+            "status": conv.status,
+        })
+
+    return items, total, (start + page_size) < total

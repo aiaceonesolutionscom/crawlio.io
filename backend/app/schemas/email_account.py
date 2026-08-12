@@ -208,6 +208,25 @@ class ConversationListResponse(BaseModel):
     items: list[EmailConversationRead]
 
 
+class ConversationPreviewRead(BaseModel):
+    id: str
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    last_message: str = ""
+    last_message_sender_type: str = ""
+    last_message_at: Optional[datetime] = None
+    ai_agent_active: bool = False
+    status: str = "active"
+
+
+class ConversationPreviewListResponse(BaseModel):
+    items: list[ConversationPreviewRead]
+    page: int
+    page_size: int
+    has_more: bool
+    total: int = 0
+
+
 class ConversationWithMessages(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     conversation: EmailConversationRead

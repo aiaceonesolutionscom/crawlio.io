@@ -363,6 +363,34 @@ export function getActiveConversations(token: string | null, accountId: string) 
   return apiFetch<ConversationListResponse>(`/api/v1/email-conversations/accounts/${accountId}/active`, token);
 }
 
+export interface ConversationPreviewDTO {
+  id: string;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  last_message: string;
+  last_message_sender_type: string;
+  last_message_at?: string | null;
+  ai_agent_active: boolean;
+  status: string;
+}
+
+export interface ConversationPreviewListResponseDTO {
+  items: ConversationPreviewDTO[];
+  page: number;
+  page_size: number;
+  has_more: boolean;
+  total: number;
+}
+
+export function getConversationPreviews(
+  token: string | null, accountId: string, page: number = 1, pageSize: number = 10
+) {
+  return apiFetch<ConversationPreviewListResponseDTO>(
+    `/api/v1/email-conversations/accounts/${accountId}/preview?page=${page}&page_size=${pageSize}`,
+    token
+  );
+}
+
 export function downloadBookedLeadsCsv(token: string | null) {
   return fetch(`${import.meta.env.VITE_API_URL}/api/v1/email-conversations/booked-leads/export`, {
     headers: {

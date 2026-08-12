@@ -17,6 +17,10 @@ import {
   type EmailQuotaDTO,
   type EmailMessageDTO,
   type EmailMessageListResponseDTO,
+  type EmailConversationDTO,
+  type EmailConversationMessageDTO,
+  type ConversationPreviewDTO,
+  getConversationPreviews,
   startConversation,
   getConversation,
   sendManualReply,
@@ -25,8 +29,6 @@ import {
   stopConversation,
   resumeConversation,
   downloadBookedLeadsCsv,
-  type EmailConversationDTO,
-  type EmailConversationMessageDTO,
   generateAIEmail,
   approveAIEmail,
   updateEmailDraft,
@@ -46,6 +48,14 @@ import { ActivityPanel } from './ActivityPanel';
 
 type Step = 'conversation' | 'preview' | 'booking';
 
+function htmlToPlainText(html: string): string {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html || '';
+  const text = tmp.textContent || tmp.innerText || '';
+  tmp.remove();
+  return text.replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 interface Props {
   backTo: string;
 }
@@ -64,6 +74,7 @@ export function EmailAgentPage({ backTo }: Props) {
   const [loadingEmails, setLoadingEmails] = useState(false);
   const [emailPage, setEmailPage] = useState(1);
   const [hasMoreEmails, setHasMoreEmails] = useState(false);
+  const [inboxPreviews, setInboxPreviews] = useState<ConversationPreviewDTO[]>([]);
   const [selectedEmail, setSelectedEmail] = useState<EmailMessageDTO | null>(null);
   const [showAgent, setShowAgent] = useState(false);
   const [emailSearch, setEmailSearch] = useState('');
@@ -148,14 +159,19 @@ export function EmailAgentPage({ backTo }: Props) {
         processInboundReplies(token, selectedAccount.id).catch(() => {
           // Non-fatal — inbox should still load even if auto-respond fails.
         });
+        const prev = await getConversationPreviews(token, selectedAccount.id, emailPage, 10);
+        setInboxPreviews(prev.items);
+        setHasMoreEmails(prev.has_more ?? false);
+        setEmails([]);
+      } else {
+        const res = await apiFetch<EmailMessageListResponseDTO>(
+          `/api/v1/email-accounts/${selectedAccount.id}/${activeTab}?page=${emailPage}&page_size=10`,
+          token
+        );
+        setEmails(res.items);
+        setHasMoreEmails(res.has_more ?? false);
+        setInboxPreviews([]);
       }
-
-      const res = await apiFetch<EmailMessageListResponseDTO>(
-        `/api/v1/email-accounts/${selectedAccount.id}/${activeTab}?page=${emailPage}&page_size=50`,
-        token
-      );
-      setEmails(res.items);
-      setHasMoreEmails(res.has_more ?? false);
     } catch (err) {
       console.error('Failed to load emails:', err);
     } finally {
@@ -535,6 +551,49 @@ export function EmailAgentPage({ backTo }: Props) {
     );
   }, [emails, emailSearch]);
 
+  const filteredPreviews = useMemo(() => {
+    if (!emailSearch) return inboxPreviews;
+    const q = emailSearch.toLowerCase();
+    return inboxPreviews.filter(
+      (p) =>
+        (p.customer_name || p.customer_email || '').toLowerCase().includes(q) ||
+        (p.last_message || '').toLowerCase().includes(q)
+    );
+  }, [inboxPreviews, emailSearch]);
+
+  const openConversationFromPreview = useCallback(
+    async (preview: ConversationPreviewDTO) => {
+      if (!selectedAccount) return;
+      try {
+        const token = await getToken();
+        const conv = await getConversation(token, preview.id);
+        setConversation(conv.conversation);
+        setMessages(conv.messages);
+        setConversationStep('conversation');
+        const customer = conv.conversation.customer_name || conv.conversation.customer_email || '';
+        setSelectedEmail({
+          id: conv.conversation.id,
+          thread_id: (conv.conversation as any).thread_id ?? null,
+          subject: customer ? `Conversation with ${customer}` : '(No subject)',
+          from_email: conv.conversation.customer_email || '',
+          to_email: '',
+          date: preview.last_message_at || '',
+          body: preview.last_message || '',
+          body_preview: '',
+          snippet: preview.last_message || '',
+          label_ids: [],
+          is_read: true,
+          is_customer_interested: false,
+          has_conversation: true,
+        });
+      } catch (err) {
+        console.error('Failed to load conversation:', err);
+        setError(err instanceof ApiError ? err.message : 'Failed to load conversation.');
+      }
+    },
+    [getToken, selectedAccount],
+  );
+
   const quotaPercent = quota ? Math.min(100, (quota.total_sent / quota.limit) * 100) : 0;
 
   // Simple Three.js background canvas
@@ -894,53 +953,98 @@ export function EmailAgentPage({ backTo }: Props) {
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {filteredEmails.length === 0 && !loadingEmails ? (
-                <div className="py-12 text-center">
-                  <InboxIcon className="mx-auto h-10 w-10 text-ink-700" />
-                  <p className="mt-2 text-[12px] text-chalk-dim">
-                    {activeTab === 'inbox'
-                    ? 'No emails — new replies auto-trigger the AI agent.'
-                    : activeTab === 'sent' ? 'No sent emails.'
-                    : activeTab === 'spam' ? 'No spam emails.'
-                    : 'Trash is empty.'}
-                  </p>
-                </div>
-              ) : (
-                <div className="divide-y divide-ink-800/70">
-                  {filteredEmails.map((email) => (
-                    <div
-                      key={email.id}
-                      className={cn(
-                        'flex cursor-pointer flex-col px-3 py-1.5 transition-colors hover:bg-ink-850/60',
-                        (selectedEmail as unknown as EmailMessageDTO | null) !== null && (selectedEmail as unknown as EmailMessageDTO).id === email.id
-                          ? 'bg-ink-850'
-                          : ''
-                      )}
-                      onClick={() => {
-                        void fetchEmailDetail(email.id);
-                      }}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-[12px] font-medium text-chalk">{email.subject || '(No subject)'}</p>
-                        <span className="whitespace-nowrap text-[10px] text-chalk-faint">
-                          {email.date ? new Date(email.date).toLocaleDateString() : ''}
-                        </span>
-                      </div>
-                      <p className="truncate text-[11px] text-chalk-dim">
-                        {(() => {
-                          if (activeTab === 'sent') {
-                            const r = parseSender(email.to_email || '');
-                            return (r && (r.name || r.email)) || 'Unknown recipient';
-                          }
-                          const s = getSenderFromEmail(email);
-                          return (s && (s.name || s.email)) || 'Unknown sender';
-                        })()}
-                      </p>
-                      <p className="truncate text-[10px] text-chalk-faint">{email.snippet || email.body_preview || 'No preview'}</p>
+              {activeTab === 'inbox'
+                ? filteredPreviews.length === 0 && !loadingEmails
+                  ? (
+                    <div className="py-12 text-center">
+                      <InboxIcon className="mx-auto h-10 w-10 text-ink-700" />
+                      <p className="mt-2 text-[12px] text-chalk-dim">No conversations yet — new customer replies auto-start one here.</p>
                     </div>
-                  ))}
-                </div>
-              )}
+                  )
+                  : (
+                    <div className="divide-y divide-ink-800/70">
+                      {filteredPreviews.map((p) => {
+                        const name = p.customer_name || p.customer_email || 'Unknown customer';
+                        const initial = (name.charAt(0) || 'C').toUpperCase();
+                        const isActive = conversation?.id === p.id;
+                        return (
+                          <div
+                            key={p.id}
+                            className={cn(
+                              'flex cursor-pointer items-center gap-3 px-3 py-2 transition-colors',
+                              isActive ? 'bg-ink-850' : 'hover:bg-ink-850/60',
+                            )}
+                            onClick={() => void openConversationFromPreview(p)}
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-800 text-[10px] font-semibold text-chalk-dim">
+                              {initial}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-[12px] font-medium text-chalk">{name}</p>
+                                <span className="whitespace-nowrap text-[10px] text-chalk-faint">
+                                  {p.last_message_at ? new Date(p.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                </span>
+                              </div>
+                              <p className="truncate text-[11px] text-chalk-dim">
+                                {p.last_message || 'No message yet...'}
+                              </p>
+                            </div>
+                            {p.ai_agent_active && (
+                              <span className="shrink-0 rounded-full border border-signal/30 bg-signal/10 px-1.5 py-0.25 text-[8px] text-signal">
+                                AI
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                : filteredEmails.length === 0 && !loadingEmails
+                  ? (
+                    <div className="py-12 text-center">
+                      <InboxIcon className="mx-auto h-10 w-10 text-ink-700" />
+                      <p className="mt-2 text-[12px] text-chalk-dim">
+                        {activeTab === 'sent' ? 'No sent emails.' : activeTab === 'spam' ? 'No spam emails.' : 'Trash is empty.'}
+                      </p>
+                    </div>
+                  )
+                  : (
+                    <div className="divide-y divide-ink-800/70">
+                      {filteredEmails.map((email) => (
+                        <div
+                          key={email.id}
+                          className={cn(
+                            'flex cursor-pointer flex-col px-3 py-1.5 transition-colors hover:bg-ink-850/60',
+                            (selectedEmail as unknown as EmailMessageDTO | null) !== null && (selectedEmail as unknown as EmailMessageDTO).id === email.id
+                              ? 'bg-ink-850'
+                              : ''
+                          )}
+                          onClick={() => {
+                            void fetchEmailDetail(email.id);
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-[12px] font-medium text-chalk">{email.subject || '(No subject)'}</p>
+                            <span className="whitespace-nowrap text-[10px] text-chalk-faint">
+                              {email.date ? new Date(email.date).toLocaleDateString() : ''}
+                            </span>
+                          </div>
+                          <p className="truncate text-[11px] text-chalk-dim">
+                            {(() => {
+                              if (activeTab === 'sent') {
+                                const r = parseSender(email.to_email || '');
+                                return (r && (r.name || r.email)) || 'Unknown recipient';
+                              }
+                              const s = getSenderFromEmail(email);
+                              return (s && (s.name || s.email)) || 'Unknown sender';
+                            })()}
+                          </p>
+                          <p className="truncate text-[10px] text-chalk-faint">{email.snippet || email.body_preview || 'No preview'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
             </div>
 
             <footer className="flex items-center justify-between gap-2 border-t border-ink-850 px-3 py-1.5">
@@ -996,10 +1100,9 @@ export function EmailAgentPage({ backTo }: Props) {
                 </header>
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                  <div
-                    className="prose prose-invert max-w-none text-[12px] text-chalk-dim"
-                    dangerouslySetInnerHTML={{ __html: (selectedEmail as any).body || (selectedEmail as any).snippet || 'No content' }}
-                  />
+                  <div className="whitespace-pre-wrap text-[12px] text-chalk-dim">
+                    {htmlToPlainText((selectedEmail as any).body || (selectedEmail as any).snippet || 'No content')}
+                  </div>
                 </div>
 
                 <div className="max-h-[46%] overflow-y-auto border-t border-ink-850 bg-ink-950 px-4 py-3">

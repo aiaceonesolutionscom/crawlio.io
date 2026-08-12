@@ -15,6 +15,8 @@ export function CrmTab() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<PipelineFilter>('all');
   const [selectedLead, setSelectedLead] = useState<EligibleLeadDTO | null>(null);
+  const [visibleMeetings, setVisibleMeetings] = useState(8);
+  const [visibleLeads, setVisibleLeads] = useState(25);
 
   const hotIds = new Set(
     meetings
@@ -30,6 +32,8 @@ export function CrmTab() {
       const [leadData, meetingData] = await Promise.all([getEligibleLeads(token), listMeetings(token)]);
       setLeads(leadData);
       setMeetings(meetingData);
+      setVisibleLeads(25);
+      setVisibleMeetings(8);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load CRM data.');
     } finally {
@@ -76,7 +80,7 @@ export function CrmTab() {
           </p>
         ) : (
           <div className="mt-3 grid gap-2 lg:grid-cols-2">
-            {meetings.map((meeting) => (
+            {meetings.slice(0, visibleMeetings).map((meeting) => (
               <div key={meeting.id} className="rounded-lg border border-ink-800 bg-ink-850 p-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate text-[12.5px] font-medium text-chalk">
@@ -95,6 +99,14 @@ export function CrmTab() {
               </div>
             ))}
           </div>
+        )}
+        {meetings.length > visibleMeetings && (
+          <button
+            onClick={() => setVisibleMeetings((v) => v + 10)}
+            className="mt-3 w-full rounded-lg border border-ink-700 bg-ink-850 py-1.5 text-[11px] text-chalk-dim hover:border-ink-600 hover:text-chalk"
+          >
+            Load more meetings ({meetings.length - visibleMeetings} remaining)
+          </button>
         )}
       </div>
 
@@ -139,7 +151,7 @@ export function CrmTab() {
               </p>
             </div>
           )}
-          {filtered.map((lead) => {
+          {filtered.slice(0, visibleLeads).map((lead) => {
             const hot = lead.email ? hotIds.has(lead.email) : false;
             return (
               <div
@@ -176,6 +188,16 @@ export function CrmTab() {
             );
           })}
         </div>
+        {filtered.length > visibleLeads && (
+          <div className="border-t border-ink-800/60 p-2">
+            <button
+              onClick={() => setVisibleLeads((v) => v + 25)}
+              className="w-full rounded-lg border border-ink-700 bg-ink-850 py-1.5 text-[11px] text-chalk-dim hover:border-ink-600 hover:text-chalk"
+            >
+              Load more leads ({filtered.length - visibleLeads} remaining)
+            </button>
+          </div>
+        )}
       </div>
 
       {selectedLead && (

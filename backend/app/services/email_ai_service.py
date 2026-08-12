@@ -44,10 +44,10 @@ async def generate_email_with_ai(
     lead_name: str = "",
     lead_company: str = "",
     lead_email: str = "",
-    company_name: str = "Crawlio",
-    services: str = "B2B lead generation and email automation",
-    usp: str = "AI-powered outreach that converts",
-    industry: str = "SaaS",
+    company_name: str = "our business",
+    services: str = "",
+    usp: str = "",
+    industry: str = "",
 ) -> dict:
     if not settings.mistral_api_key:
         raise RuntimeError("MISTRAL_API_KEY is not configured")
@@ -170,12 +170,18 @@ async def initialize_agent_session(
 async def get_agent_conversation_history(
     session: AsyncSession, conversation_id: str
 ) -> list[EmailConversationMessage]:
+    from sqlalchemy import func as sa_func
+    from app.services.email_conversation_service import clean_message_content
+
     result = await session.execute(
         select(EmailConversationMessage)
         .where(EmailConversationMessage.conversation_id == conversation_id)
-        .order_by(EmailConversationMessage.created_at)
+        .order_by(sa_func.coalesce(EmailConversationMessage.sent_at, EmailConversationMessage.created_at))
     )
-    return list(result.scalars().all())
+    messages = list(result.scalars().all())
+    for msg in messages:
+        msg.content = clean_message_content(msg.content)
+    return messages
 
 
 async def agent_collect_business_info(
@@ -223,11 +229,15 @@ async def agent_generate_outreach(
 
     business_context = conversation.business_context or "No business context provided"
 
+    from app.services.business_profile_service import get_profile
+
+    profile = await get_profile(session, conversation.workspace_id)
     ai_result = await generate_email_with_ai(
         prompt=f"Generate outreach email based on this business context: {business_context}",
-        company_name="Crawlio",
-        services="B2B lead generation",
-        usp="AI-powered outreach",
+        company_name=(profile.business_name if profile and profile.business_name else "our business"),
+        services=(profile.services or "") if profile else "",
+        usp=(profile.usp or "") if profile else "",
+        industry=(profile.industry or "") if profile else "",
     )
 
     draft = await create_draft(
@@ -287,7 +297,9 @@ async def agent_resume_conversation(
     return True
 
 
-AUTO_REPLY_PROMPT = """You are the AI email agent for {company_name}, an AI receptionist that handles customer replies professionally.
+AUTO_REPLY_PROMPT = """You are the AI receptionist for {company_name}, a friendly, professional receptionist answering customer emails on behalf of that business.
+
+You are NOT a platform or software product. Always write as a person working for {company_name}. Never mention Crawlio, AI agents, receptionist software, or that you are an automated system unless the business context explicitly instructs you to.
 
 Business context:
 {business_context}
@@ -302,7 +314,7 @@ Available meeting slots (UTC ISO datetimes, choose ONLY from these or suggest on
 {available_slots}
 
 Instructions:
-1. Respond to the customer's latest reply in a natural, helpful tone.
+1. Respond to the customer's latest reply in a natural, helpful tone as a receptionist of {company_name}.
 2. Keep the reply short and professional (2-4 sentences).
 3. If the customer explicitly asks to unsubscribe / stop emails / opt out, set action to "unsubscribe" and confirm politely and briefly.
 4. If the customer wants a meeting, pick the earliest suitable slot from the available list and confirm it clearly (action "book").
@@ -322,7 +334,7 @@ async def _run_auto_reply_llm(
     business_context: str,
     history: str,
     incoming_message: str,
-    company_name: str = "Crawlio",
+    company_name: str = "our team",
     available_slots: Optional[list[str]] = None,
 ) -> dict:
     slots_text = "\n".join(f"  {s}" for s in (available_slots or [])) or "  (none available right now)"
@@ -392,6 +404,7 @@ async def auto_respond_to_conversation(
     pushed to the workspace's WebSocket channel in real time."""
     from app.services import email_sync_service, meeting_service, agent_realtime
     from app.services.business_profile_service import get_profile, to_context
+    from app.services.email_conversation_service import clean_message_content
     from app.db.models.email_account import EmailAccount
     from datetime import datetime, timezone
 
@@ -449,11 +462,16 @@ async def auto_respond_to_conversation(
             conversation_id=conversation.id, detail="Customer opted out",
         )
     else:
+        company_name = (
+            profile.business_name
+            if profile and profile.business_name
+            else (account.display_name or "our team")
+        )
         result = await _run_auto_reply_llm(
             business_context=business_context,
             history=history,
             incoming_message=incoming_message,
-            company_name=profile.business_name if profile else "Crawlio",
+            company_name=company_name,
             available_slots=available_text,
         )
 
@@ -461,7 +479,7 @@ async def auto_respond_to_conversation(
     subject = result.get("subject", f"Re: {conversation.subject}")
     if "Re:" not in subject:
         subject = f"Re: {conversation.subject}"
-    body = result.get("body", "")
+    body = clean_message_content(result.get("body", ""))
     interested = bool(result.get("interested"))
 
     # STOP guard #2: only send if the agent is still enabled right now.
@@ -490,28 +508,30 @@ async def auto_respond_to_conversation(
         if not body:
             body = "Understood. You have been removed from our outreach list and will not receive further emails from us."
 
-    await email_sync_service.send_email_from_account(session, account, recipient, subject, body)
+    send_result = await email_sync_service.send_email_from_account(
+        session, account, recipient, subject, body, thread_id=conversation.thread_id
+    )
+    outbound_id = None
+    if send_result:
+        outbound_id = (
+            send_result.get("id")
+            or send_result.get("messageId")
+            or send_result.get("email_message_id")
+        )
 
     await agent_realtime.publish_activity(
         session, conversation.workspace_id, "ai_reply_sent",
         conversation_id=conversation.id, detail="Reply sent to customer",
     )
 
-    customer_msg = EmailConversationMessage(
-        conversation_id=conversation.id,
-        sender_type="customer",
-        content=incoming_message,
-        is_approved=True,
-        sent_at=datetime.now(timezone.utc),
-    )
-    session.add(customer_msg)
-
     ai_msg = EmailConversationMessage(
         conversation_id=conversation.id,
         sender_type="ai",
+        direction="outbound",
         content=body,
         is_approved=True,
         sent_at=datetime.now(timezone.utc),
+        provider_message_id=outbound_id,
     )
     session.add(ai_msg)
 
@@ -572,13 +592,84 @@ async def auto_respond_to_conversation(
     }
 
 
+async def _is_inbound_processed(
+    session: AsyncSession, account_id: str, provider_message_id: str
+) -> bool:
+    """Idempotency guard: a provider message must never be processed twice."""
+    if not provider_message_id:
+        return False
+    result = await session.execute(
+        select(EmailConversationMessage.id)
+        .join(EmailConversation, EmailConversation.id == EmailConversationMessage.conversation_id)
+        .where(
+            EmailConversation.email_account_id == account_id,
+            EmailConversationMessage.provider_message_id == provider_message_id,
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _store_inbound_message(
+    session: AsyncSession,
+    conversation: EmailConversation,
+    message_id: str,
+    content: str,
+) -> bool:
+    """Append the customer's inbound email to the conversation. Returns True if
+    newly stored, False if it was already processed (dedup)."""
+    already = await session.execute(
+        select(EmailConversationMessage.id).where(
+            EmailConversationMessage.conversation_id == conversation.id,
+            EmailConversationMessage.provider_message_id == message_id,
+        )
+    )
+    if already.scalar_one_or_none() is not None:
+        return False
+
+    session.add(
+        EmailConversationMessage(
+            conversation_id=conversation.id,
+            sender_type="customer",
+            direction="inbound",
+            content=content,
+            is_approved=True,
+            sent_at=datetime.now(timezone.utc),
+            provider_message_id=message_id,
+        )
+    )
+    conversation.last_processed_message_id = message_id
+    conversation.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    return True
+
+
+inbound_scan_guard: dict[str, datetime] = {}
+
+
 async def process_inbound_replies_for_account(
     session: AsyncSession, account_id: str
 ) -> dict:
-    """Sync-based auto-agent: fetch inbox, match customer replies to active AI
-    conversations, and auto-respond to each new one (deduped by message id)."""
+    """Core auto-receptionist pipeline.
+
+    For EVERY new inbound email from a customer:
+      1. identify the customer (from address, never the account itself)
+      2. find-or-create ONE stable conversation per customer
+      3. append the inbound message to that conversation (dedup by message id)
+      4. if the receptionist is enabled for the conversation, generate a reply
+         from business knowledge + full conversation history + the new message,
+         send it for real through the connected Gmail account (same thread),
+         and append the outbound message to the same conversation.
+    """
     from app.services import email_sync_service
+    from app.services.email_conversation_service import _extract_name, clean_message_content, find_or_create_conversation, strip_email_quotes
     from app.db.models.email_account import EmailAccount
+
+    # Cooldown: don't re-scan the same mailbox back-to-back (it hammers Gmail).
+    now = datetime.now(timezone.utc)
+    last = _inbound_scan_guard.get(account_id)
+    if last and (now - last).total_seconds() < 25:
+        return {"processed": 0, "results": [], "reason": "cooldown"}
+    _inbound_scan_guard[account_id] = now
 
     account_result = await session.execute(
         select(EmailAccount).where(EmailAccount.id == account_id)
@@ -587,45 +678,58 @@ async def process_inbound_replies_for_account(
     if not account:
         raise RuntimeError("Email account not found")
 
-    inbox = await email_sync_service.sync_inbox(session, account)
+    inbox, _ = await email_sync_service.sync_inbox(session, account, page=1, page_size=20, max_total=20)
 
-    conv_result = await session.execute(
-        select(EmailConversation).where(
-            EmailConversation.email_account_id == account_id,
-            EmailConversation.ai_agent_active == True,  # noqa: E712
-            EmailConversation.status == "active",
+    account_email = (account.email_address or "").lower()
+    processed: list[dict] = []
+    for msg in inbox:
+        from_addr = _extract_from_email(msg.get("from", ""))
+        if not from_addr or from_addr.lower() == account_email:
+            # Loop protection: never respond to our own outgoing mail.
+            continue
+        if await _is_inbound_processed(session, account_id, msg.get("id", "")):
+            continue
+
+        try:
+            conversation = await find_or_create_conversation(
+                session,
+                workspace_id=account.workspace_id,
+                email_account_id=account_id,
+                customer_email=from_addr,
+                customer_name=_extract_name(msg.get("from", "")),
+                subject=msg.get("subject", ""),
+                thread_id=msg.get("thread_id"),
+                message_id=msg.get("id"),
+                ai_enabled=True,
+            )
+        except RuntimeError as exc:
+            processed.append({"message_id": msg.get("id"), "result": {"status": "failed", "error": str(exc)}})
+            continue
+
+        detail = await email_sync_service.get_email_detail(session, account, msg["id"])
+        incoming_body = strip_email_quotes(detail.get("body") or detail.get("snippet") or "")
+
+        stored = await _store_inbound_message(
+            session, conversation, msg.get("id", ""), incoming_body or msg.get("snippet", "")
         )
-    )
-    conversations = list(conv_result.scalars().all())
-
-    replied: list[dict] = []
-    for conv in conversations:
-        if not conv.customer_email:
+        if not stored:
             continue
 
-        new_messages = [
-            m for m in inbox
-            if _extract_from_email(m.get("from", "")).lower() == conv.customer_email.lower()
-            and m.get("id") != conv.last_processed_message_id
-        ]
-        if not new_messages:
+        if not conversation.ai_agent_active or conversation.status != "active":
+            # Receptionist stopped for this conversation: log only, no reply.
+            processed.append({
+                "conversation_id": conversation.id,
+                "result": {"status": "stored_only", "reason": "ai_paused"},
+            })
             continue
-
-        latest = new_messages[0]
-        detail = await email_sync_service.get_email_detail(session, account, latest["id"])
-        incoming_body = detail.get("body") or detail.get("snippet") or ""
 
         try:
             result = await auto_respond_to_conversation(
-                session, conv, incoming_body
+                session, conversation, incoming_body
             )
         except Exception as exc:
             result = {"status": "failed", "error": str(exc)}
 
-        conv.last_processed_message_id = latest["id"]
-        conv.updated_at = datetime.now(timezone.utc)
-        await session.commit()
+        processed.append({"conversation_id": conversation.id, "result": result})
 
-        replied.append({"conversation_id": conv.id, "result": result})
-
-    return {"processed": len(replied), "results": replied}
+    return {"processed": len(processed), "results": processed}

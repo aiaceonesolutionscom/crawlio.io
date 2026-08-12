@@ -333,7 +333,7 @@ async def list_meetings(
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
     result = await session.execute(
-        select(Meeting).where(Meeting.workspace_id == workspace.id).order_by(Meeting.scheduled_at.desc())
+        select(Meeting).where(Meeting.workspace_id == workspace.id).order_by(Meeting.scheduled_at.desc()).limit(50)
     )
     meetings = list(result.scalars().all())
     return [

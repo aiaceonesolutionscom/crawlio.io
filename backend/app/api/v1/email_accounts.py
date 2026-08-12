@@ -12,7 +12,7 @@ from app.schemas.email_account import (
     EmailAccountRead,
     EmailAccountListResponse,
     EmailMessageRead,
-    EmailMessageListResponse,
+    EmailMessagePageResponse,
     EmailQuotaRead,
 )
 from app.services import email_account_service, email_sync_service
@@ -39,25 +39,6 @@ async def google_oauth_callback(
         )
 
 
-@router.get("/oauth/microsoft/callback")
-async def microsoft_oauth_callback(
-    code: str = Query(...),
-    state: str = Query(...),
-    session: AsyncSession = Depends(get_session),
-):
-    try:
-        workspace_id, user_id = state.split(":")
-        account = await email_account_service.connect_microsoft_account(
-            session, workspace_id, user_id, code
-        )
-        return EmailAccountRead.model_validate(account)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to connect Outlook: {exc}",
-        )
-
-
 @router.get("/connect/google", response_model=EmailAccountConnectResponse)
 async def connect_google(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
@@ -65,16 +46,6 @@ async def connect_google(
 ):
     state = f"{workspace.id}:{user_id}"
     auth_url = await email_account_service.get_google_auth_url(state)
-    return EmailAccountConnectResponse(auth_url=auth_url)
-
-
-@router.get("/connect/microsoft", response_model=EmailAccountConnectResponse)
-async def connect_microsoft(
-    workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
-    user_id: Annotated[str, Depends(get_current_user_id)],
-):
-    state = f"{workspace.id}:{user_id}"
-    auth_url = await email_account_service.get_microsoft_auth_url(state)
     return EmailAccountConnectResponse(auth_url=auth_url)
 
 
@@ -111,60 +82,92 @@ async def get_quota(
     return EmailQuotaRead(**quota)
 
 
-@router.get("/{account_id}/inbox", response_model=EmailMessageListResponse)
+@router.get("/{account_id}/inbox", response_model=EmailMessagePageResponse)
 async def get_inbox(
     account_id: str,
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
 ):
     account = await email_account_service.get_email_account(session, account_id)
     if not account or account.workspace_id != workspace.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    messages = await email_sync_service.sync_inbox(session, account)
-    return EmailMessageListResponse(items=[EmailMessageRead(**m) for m in messages])
+    messages, has_more = await email_sync_service.sync_inbox(session, account, page=page, page_size=page_size)
+    return EmailMessagePageResponse(
+        items=[EmailMessageRead(**m) for m in messages],
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+        total=len(messages),
+    )
 
 
-@router.get("/{account_id}/sent", response_model=EmailMessageListResponse)
+@router.get("/{account_id}/sent", response_model=EmailMessagePageResponse)
 async def get_sent(
     account_id: str,
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
 ):
     account = await email_account_service.get_email_account(session, account_id)
     if not account or account.workspace_id != workspace.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    messages = await email_sync_service.sync_sent(session, account)
-    return EmailMessageListResponse(items=[EmailMessageRead(**m) for m in messages])
+    messages, has_more = await email_sync_service.sync_sent(session, account, page=page, page_size=page_size)
+    return EmailMessagePageResponse(
+        items=[EmailMessageRead(**m) for m in messages],
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+        total=len(messages),
+    )
 
 
-@router.get("/{account_id}/trash", response_model=EmailMessageListResponse)
+@router.get("/{account_id}/trash", response_model=EmailMessagePageResponse)
 async def get_trash(
     account_id: str,
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
 ):
     account = await email_account_service.get_email_account(session, account_id)
     if not account or account.workspace_id != workspace.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    messages = await email_sync_service.sync_trash(session, account)
-    return EmailMessageListResponse(items=[EmailMessageRead(**m) for m in messages])
+    messages, has_more = await email_sync_service.sync_trash(session, account, page=page, page_size=page_size)
+    return EmailMessagePageResponse(
+        items=[EmailMessageRead(**m) for m in messages],
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+        total=len(messages),
+    )
 
 
-@router.get("/{account_id}/spam", response_model=EmailMessageListResponse)
+@router.get("/{account_id}/spam", response_model=EmailMessagePageResponse)
 async def get_spam(
     account_id: str,
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
 ):
     account = await email_account_service.get_email_account(session, account_id)
     if not account or account.workspace_id != workspace.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    messages = await email_sync_service.sync_spam(session, account)
-    return EmailMessageListResponse(items=[EmailMessageRead(**m) for m in messages])
+    messages, has_more = await email_sync_service.sync_spam(session, account, page=page, page_size=page_size)
+    return EmailMessagePageResponse(
+        items=[EmailMessageRead(**m) for m in messages],
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+        total=len(messages),
+    )
 
 
 @router.get("/{account_id}/messages/{message_id}")
@@ -179,7 +182,7 @@ async def get_message_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
     message = await email_sync_service.get_email_detail(session, account, message_id)
-    return message
+    return EmailMessageRead(**message)
 
 
 @router.post("/{account_id}/sync")

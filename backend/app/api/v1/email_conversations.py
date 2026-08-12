@@ -2,7 +2,7 @@ import json
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_workspace, require_plan
@@ -16,6 +16,7 @@ from app.schemas.email_account import (
     EmailConversationRead,
     EmailConversationMessageRead,
     ConversationListResponse,
+    ConversationPreviewListResponse,
     ConversationWithMessages,
     CSVExportResponse,
     EmailQuotaRead,
@@ -37,7 +38,7 @@ async def start_conversation(
 
     conv = await email_conversation_service.start_conversation(
         session, workspace.id, input.email_account_id,
-        input.email_id, input.lead_name, input.lead_email
+        input.email_id, input.lead_name, input.lead_email, input.thread_id
     )
     return EmailConversationRead.model_validate(conv)
 
@@ -124,8 +125,9 @@ async def get_conversation(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
-    from sqlalchemy import select
+    from sqlalchemy import func, select
     from app.db.models.email_account import EmailConversation, EmailConversationMessage
+    from app.services.email_conversation_service import clean_message_content
     result = await session.execute(
         select(EmailConversation).where(
             EmailConversation.id == conversation_id,
@@ -139,9 +141,11 @@ async def get_conversation(
     msg_result = await session.execute(
         select(EmailConversationMessage).where(
             EmailConversationMessage.conversation_id == conversation_id
-        ).order_by(EmailConversationMessage.created_at)
+        ).order_by(func.coalesce(EmailConversationMessage.sent_at, EmailConversationMessage.created_at))
     )
     messages = list(msg_result.scalars().all())
+    for m in messages:
+        m.content = clean_message_content(m.content)
 
     return ConversationWithMessages(
         conversation=EmailConversationRead.model_validate(conv),
@@ -205,6 +209,31 @@ async def get_active_conversations(
     )
     return ConversationListResponse(
         items=[EmailConversationRead.model_validate(c) for c in conversations]
+    )
+
+
+@router.get("/accounts/{account_id}/preview", response_model=ConversationPreviewListResponse)
+async def conversation_previews(
+    account_id: str,
+    workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
+    session: AsyncSession = Depends(get_session),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+):
+    """One clean WhatsApp-style row per customer conversation (latest message only)."""
+    account = await email_account_service.get_email_account(session, account_id)
+    if not account or account.workspace_id != workspace.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    items, total, has_more = await email_conversation_service.list_conversation_previews(
+        session, account_id, page=page, page_size=page_size
+    )
+    return ConversationPreviewListResponse(
+        items=items,
+        page=page,
+        page_size=page_size,
+        has_more=has_more,
+        total=total,
     )
 
 

@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -9,6 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.models.email_account import EmailAccount
 from app.services import email_account_service
+
+# In-memory message-id list cache so paging Prev/Next doesn't re-walk Gmail.
+_LIST_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_LIST_CACHE_TTL = 30.0
+
+
+def _list_cache_key(account_id: str, query: str) -> str:
+    return f"{account_id}:{query}"
 
 
 async def get_valid_access_token(account: EmailAccount) -> str:
@@ -23,31 +33,85 @@ async def get_valid_access_token(account: EmailAccount) -> str:
 
     if account.provider == "google":
         return await email_account_service.refresh_google_token(account)
-    elif account.provider == "microsoft":
-        return await email_account_service.refresh_microsoft_token(account)
     return account.access_token
 
 
-async def get_gmail_messages(access_token: str, query: str = "in:inbox", max_results: int = 50) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+async def _load_ids(
+    client: httpx.AsyncClient,
+    access_token: str,
+    query: str,
+    page: int,
+    page_size: int,
+    max_total: int,
+    cache_key: str,
+) -> list[dict]:
+    """Walk the Google list endpoint (up to max_total ids), cached per
+    (account, query) for _LIST_CACHE_TTL seconds so paging stays fast."""
+    now = time.monotonic()
+    if cache_key:
+        cached = _LIST_CACHE.get(cache_key)
+        if cached and now - cached[0] < _LIST_CACHE_TTL:
+            return list(cached[1])
+
+    ids: list[dict] = []
+    next_token: Optional[str] = None
+    while len(ids) < min(page * page_size, max_total):
+        params = {"q": query, "maxResults": 200}
+        if next_token:
+            params["pageToken"] = next_token
         list_resp = await client.get(
-            f"https://gmail.googleapis.com/gmail/v1/users/me/messages?q={query}&maxResults={max_results}",
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
             headers={"Authorization": f"Bearer {access_token}"},
+            params=params,
         )
         list_resp.raise_for_status()
-        messages = list_resp.json().get("messages", [])
+        data = list_resp.json()
+        batch = data.get("messages", [])
+        if not batch:
+            break
+        ids.extend(batch)
+        next_token = data.get("nextPageToken")
+        if not next_token:
+            break
 
-        result = []
-        for msg_ref in messages[:max_results]:
-            msg_resp = await client.get(
-                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_ref['id']}?format=metadata",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            msg_resp.raise_for_status()
-            msg_data = msg_resp.json()
+    if cache_key:
+        _LIST_CACHE[cache_key] = (time.monotonic(), list(ids))
+    return ids
+
+
+async def get_gmail_messages(
+    access_token: str,
+    query: str = "in:inbox",
+    page: int = 1,
+    page_size: int = 10,
+    max_total: int = 500,
+    cache_key: str = "",
+) -> tuple[list[dict], bool]:
+    """Fetch a page of Gmail messages (metadata only) with stable pagination.
+
+    The list endpoint is walked internally (up to ``max_total`` ids), then only
+    the current page's messages are detail-fetched so each page stays fast.
+    Returns (items, has_more)."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        ids = await _load_ids(client, access_token, query, page, page_size, max_total, cache_key)
+        total = len(ids)
+        start = (page - 1) * page_size
+        page_ids = ids[start:start + page_size]
+        has_more = start + page_size < total
+
+        semaphore = asyncio.Semaphore(10)
+
+        async def fetch_one(msg_ref: dict) -> dict:
+            async with semaphore:
+                msg_resp = await client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_ref['id']}?format=metadata",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                msg_resp.raise_for_status()
+                msg_data = msg_resp.json()
 
             headers_list = {h["name"].lower(): h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
-            result.append({
+            return {
                 "id": msg_data["id"],
                 "thread_id": msg_data.get("threadId"),
                 "subject": headers_list.get("subject", ""),
@@ -56,9 +120,10 @@ async def get_gmail_messages(access_token: str, query: str = "in:inbox", max_res
                 "date": headers_list.get("date", ""),
                 "snippet": msg_data.get("snippet", ""),
                 "label_ids": msg_data.get("labelIds", []),
-            })
+            }
 
-        return result
+        results = await asyncio.gather(*(fetch_one(r) for r in page_ids))
+        return list(results), has_more
 
 
 async def get_gmail_message_detail(access_token: str, message_id: str) -> dict:
@@ -98,154 +163,82 @@ async def get_gmail_message_detail(access_token: str, message_id: str) -> dict:
         }
 
 
-async def send_gmail_message(access_token: str, to: str, subject: str, body: str) -> dict:
+async def send_gmail_message(
+    access_token: str, to: str, subject: str, body: str, thread_id: Optional[str] = None
+) -> dict:
     import base64
     from email.mime.text import MIMEText
 
     message = MIMEText(body, "html")
     message["to"] = to
     message["subject"] = subject
+    if thread_id and "@" in thread_id:
+        message["In-Reply-To"] = thread_id
+        message["References"] = thread_id
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+    payload: dict = {"raw": raw}
+    if thread_id:
+        payload["threadId"] = thread_id
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
             headers={"Authorization": f"Bearer {access_token}"},
-            json={"raw": raw},
+            json=payload,
         )
         resp.raise_for_status()
         return resp.json()
 
 
-async def get_outlook_messages(access_token: str, folder: str = "inbox", top: int = 50) -> list[dict]:
-    folder_path = (
-        "inbox"
-        if folder == "inbox"
-        else "sentItems"
-        if folder == "sent"
-        else "junkemail"
-        if folder == "spam"
-        else "deletedItems"
-    )
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(
-            f"https://graph.microsoft.com/v1.0/me/mailFolders/{folder_path}/messages?$top={top}&$orderby=receivedDateTime desc",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        result = []
-        for msg in data.get("value", []):
-            result.append({
-                "id": msg["id"],
-                "thread_id": msg.get("conversationId"),
-                "subject": msg.get("subject", ""),
-                "from": msg.get("from", {}).get("emailAddress", {}).get("address", ""),
-                "to": msg.get("toRecipients", [{}])[0].get("emailAddress", {}).get("address", "") if msg.get("toRecipients") else "",
-                "date": msg.get("receivedDateTime", ""),
-                "body_preview": msg.get("bodyPreview", ""),
-                "is_read": msg.get("isRead", True),
-            })
-
-        return result
-
-
-async def get_outlook_message_detail(access_token: str, message_id: str) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"https://graph.microsoft.com/v1.0/me/messages/{message_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        resp.raise_for_status()
-        msg = resp.json()
-
-        return {
-            "id": msg["id"],
-            "thread_id": msg.get("conversationId"),
-            "subject": msg.get("subject", ""),
-            "from": msg.get("from", {}).get("emailAddress", {}).get("address", ""),
-            "to": msg.get("toRecipients", [{}])[0].get("emailAddress", {}).get("address", "") if msg.get("toRecipients") else "",
-            "date": msg.get("receivedDateTime", ""),
-            "body": msg.get("body", {}).get("content", ""),
-            "body_preview": msg.get("bodyPreview", ""),
-            "is_read": msg.get("isRead", True),
-        }
-
-
-async def send_outlook_message(access_token: str, to: str, subject: str, body: str) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            "https://graph.microsoft.com/v1.0/me/sendMail",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "message": {
-                    "subject": subject,
-                    "body": {"contentType": "HTML", "content": body},
-                    "toRecipients": [{"emailAddress": {"address": to}}],
-                },
-                "saveToSentItems": "true",
-            },
-        )
-        resp.raise_for_status()
-        return {"status": "sent"}
-
-
-async def sync_inbox(session: AsyncSession, account: EmailAccount) -> list[dict]:
+async def sync_inbox(
+    session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
+) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:inbox")
-    elif account.provider == "microsoft":
-        return await get_outlook_messages(access_token, "inbox")
-    return []
+        return await get_gmail_messages(access_token, "in:inbox", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
+    return [], False
 
 
-async def sync_sent(session: AsyncSession, account: EmailAccount) -> list[dict]:
+async def sync_sent(
+    session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
+) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:sent")
-    elif account.provider == "microsoft":
-        return await get_outlook_messages(access_token, "sent")
-    return []
+        return await get_gmail_messages(access_token, "in:sent", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
+    return [], False
 
 
-async def sync_trash(session: AsyncSession, account: EmailAccount) -> list[dict]:
+async def sync_trash(
+    session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
+) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:trash")
-    elif account.provider == "microsoft":
-        return await get_outlook_messages(access_token, "trash")
-    return []
+        return await get_gmail_messages(access_token, "in:trash", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
+    return [], False
 
 
-async def sync_spam(session: AsyncSession, account: EmailAccount) -> list[dict]:
+async def sync_spam(
+    session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
+) -> tuple[list[dict], bool]:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await get_gmail_messages(access_token, "in:spam")
-    elif account.provider == "microsoft":
-        return await get_outlook_messages(access_token, "spam")
-    return []
+        return await get_gmail_messages(access_token, "in:spam", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
+    return [], False
 
 
 async def get_email_detail(session: AsyncSession, account: EmailAccount, message_id: str) -> dict:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
         return await get_gmail_message_detail(access_token, message_id)
-    elif account.provider == "microsoft":
-        return await get_outlook_message_detail(access_token, message_id)
     return {}
 
 
 async def send_email_from_account(
-    session: AsyncSession, account: EmailAccount, to: str, subject: str, body: str
+    session: AsyncSession, account: EmailAccount, to: str, subject: str, body: str, thread_id: Optional[str] = None
 ) -> dict:
     access_token = await get_valid_access_token(account)
     if account.provider == "google":
-        return await send_gmail_message(access_token, to, subject, body)
-    elif account.provider == "microsoft":
-        return await send_outlook_message(access_token, to, subject, body)
+        return await send_gmail_message(access_token, to, subject, body, thread_id=thread_id)
     return {"status": "unsupported"}

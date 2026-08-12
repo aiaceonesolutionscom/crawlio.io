@@ -84,6 +84,7 @@ class EmailConversationRead(BaseModel):
     subject: str
     status: str
     ai_agent_active: bool
+    thread_id: Optional[str] = None
     business_context: Optional[str] = None
     customer_email: Optional[str] = None
     customer_name: Optional[str] = None
@@ -100,6 +101,8 @@ class EmailConversationMessageRead(BaseModel):
     content: str
     is_approved: bool
     sent_at: Optional[datetime] = None
+    direction: str = "inbound"
+    provider_message_id: Optional[str] = None
     created_at: datetime
 
 
@@ -133,6 +136,7 @@ class ConversationStartRequest(BaseModel):
     email_id: str
     lead_name: str = ""
     lead_email: str = ""
+    thread_id: Optional[str] = None
 
 
 class ConversationMessageRequest(BaseModel):
@@ -188,12 +192,39 @@ class EmailMessageListResponse(BaseModel):
     items: list[EmailMessageRead]
 
 
+class EmailMessagePageResponse(BaseModel):
+    items: list[EmailMessageRead]
+    page: int
+    page_size: int
+    has_more: bool
+    total: int = 0
+
+
 class CSVExportResponse(BaseModel):
     csv: str
 
 
 class ConversationListResponse(BaseModel):
     items: list[EmailConversationRead]
+
+
+class ConversationPreviewRead(BaseModel):
+    id: str
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    last_message: str = ""
+    last_message_sender_type: str = ""
+    last_message_at: Optional[datetime] = None
+    ai_agent_active: bool = False
+    status: str = "active"
+
+
+class ConversationPreviewListResponse(BaseModel):
+    items: list[ConversationPreviewRead]
+    page: int
+    page_size: int
+    has_more: bool
+    total: int = 0
 
 
 class ConversationWithMessages(BaseModel):

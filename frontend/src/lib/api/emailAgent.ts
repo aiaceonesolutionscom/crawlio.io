@@ -60,6 +60,7 @@ export interface EmailConversationDTO {
   subject: string;
   status: string;
   ai_agent_active: boolean;
+  thread_id?: string | null;
   business_context: string | null;
   customer_email?: string | null;
   customer_name?: string | null;
@@ -95,14 +96,14 @@ export interface EmailMessageDTO {
 
 export interface EmailMessageListResponseDTO {
   items: EmailMessageDTO[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
 }
 
 export function getGoogleAuthUrl(token: string | null) {
   return apiFetch<EmailAccountConnectResponseDTO>('/api/v1/email-accounts/connect/google', token);
-}
-
-export function getMicrosoftAuthUrl(token: string | null) {
-  return apiFetch<EmailAccountConnectResponseDTO>('/api/v1/email-accounts/connect/microsoft', token);
 }
 
 export function listEmailAccounts(token: string | null) {
@@ -241,6 +242,7 @@ export interface ConversationStartRequest {
   email_id: string;
   lead_name?: string;
   lead_email?: string;
+  thread_id?: string | null;
 }
 
 export interface ConversationMessageRequest {
@@ -259,6 +261,8 @@ export interface BookingRequest {
 }
 
 export interface BusinessInfoRequest {
+  email_account_id: string;
+  conversation_id: string;
   business_name: string;
   business_subject: string;
   business_additional_info?: string;
@@ -273,6 +277,7 @@ export interface ConversationWithMessages {
     subject: string;
     status: string;
     ai_agent_active: boolean;
+    thread_id?: string | null;
     business_context: string | null;
     customer_email?: string | null;
     customer_name?: string | null;
@@ -303,7 +308,11 @@ export function sendConversationMessage(token: string | null, input: Conversatio
 export function sendManualReply(token: string | null, conversationId: string, message: string) {
   return apiFetch<{ status: string; message: string }>(`/api/v1/email-conversations/${conversationId}/reply`, token, {
     method: 'POST',
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      message,
+      sender_type: 'user',
+    }),
   });
 }
 
@@ -332,17 +341,54 @@ export function bookMeeting(token: string | null, input: BookingRequest) {
   );
 }
 
-export function saveBusinessInfo(token: string | null, conversationId: string, input: BusinessInfoRequest) {
+export function saveBusinessInfo(
+  token: string | null,
+  accountId: string,
+  conversationId: string,
+  input: Omit<BusinessInfoRequest, 'email_account_id' | 'conversation_id'>,
+) {
   return apiFetch<{ status: string; business_context: any }>(
     `/api/v1/email-conversations/${conversationId}/business-info`, token, {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        email_account_id: accountId,
+        conversation_id: conversationId,
+        ...input,
+      }),
     }
   );
 }
 
 export function getActiveConversations(token: string | null, accountId: string) {
   return apiFetch<ConversationListResponse>(`/api/v1/email-conversations/accounts/${accountId}/active`, token);
+}
+
+export interface ConversationPreviewDTO {
+  id: string;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  last_message: string;
+  last_message_sender_type: string;
+  last_message_at?: string | null;
+  ai_agent_active: boolean;
+  status: string;
+}
+
+export interface ConversationPreviewListResponseDTO {
+  items: ConversationPreviewDTO[];
+  page: number;
+  page_size: number;
+  has_more: boolean;
+  total: number;
+}
+
+export function getConversationPreviews(
+  token: string | null, accountId: string, page: number = 1, pageSize: number = 10
+) {
+  return apiFetch<ConversationPreviewListResponseDTO>(
+    `/api/v1/email-conversations/accounts/${accountId}/preview?page=${page}&page_size=${pageSize}`,
+    token
+  );
 }
 
 export function downloadBookedLeadsCsv(token: string | null) {

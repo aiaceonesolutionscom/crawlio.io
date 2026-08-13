@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { formatSender, getSenderFromEmail, parseSender } from '../utils/sender';
+import { khiTime } from '../utils/time';
 import {
   listEmailAccounts,
   getGoogleAuthUrl,
@@ -78,6 +79,7 @@ export function EmailAgentPage({ backTo }: Props) {
   const [selectedEmail, setSelectedEmail] = useState<EmailMessageDTO | null>(null);
   const [showAgent, setShowAgent] = useState(false);
   const [emailSearch, setEmailSearch] = useState('');
+  const [inboundError, setInboundError] = useState<string | null>(null);
 
   // Workspace-wide agent setup (onboarding gate) + top-level views
   const [pageTab, setPageTab] = useState<'inbox' | 'outreach' | 'crm'>('inbox');
@@ -156,9 +158,14 @@ export function EmailAgentPage({ backTo }: Props) {
       // Fire-and-forget: auto-respond to new customer replies in the background
       // so the inbox list renders immediately instead of blocking on Gmail + AI.
       if (activeTab === 'inbox') {
-        processInboundReplies(token, selectedAccount.id).catch(() => {
-          // Non-fatal — inbox should still load even if auto-respond fails.
-        });
+        processInboundReplies(token, selectedAccount.id)
+          .then((res) => {
+            if (res?.reconnect_required) {
+              setInboundError('Gmail connection expired — please reconnect.');
+            } else {
+              setInboundError(null);
+            }
+          });
         const prev = await getConversationPreviews(token, selectedAccount.id, emailPage, 10);
         setInboxPreviews(prev.items);
         setHasMoreEmails(prev.has_more ?? false);
@@ -288,6 +295,36 @@ export function EmailAgentPage({ backTo }: Props) {
   useEffect(() => {
     void fetchEmails();
   }, [selectedAccount, activeTab]);
+
+  // Real-time inbox: poll for new inbound every 30s so the assistant
+  // receives customer replies and replies back automatically without a manual click.
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const tick = () => {
+      void getToken().then((token) => {
+        processInboundReplies(token, selectedAccount.id)
+          .then((res) => {
+            if (res?.reconnect_required) {
+              setInboundError('Gmail connection expired — please reconnect.');
+            } else {
+              setInboundError(null);
+            }
+          })
+          .catch((err) => {
+            const status = err instanceof ApiError ? err.status : 0;
+            setInboundError(
+              status === 401
+                ? 'Gmail connection expired — please reconnect.'
+                : `Could not sync inbox: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        void fetchEmails();
+      });
+    };
+    tick(); // initial immediate sync
+    const id = window.setInterval(tick, 30000);
+    return () => clearInterval(id);
+  }, [selectedAccount, fetchEmails, getToken]);
 
   const resetConversation = () => {
     setConversation(null);
@@ -799,6 +836,23 @@ export function EmailAgentPage({ backTo }: Props) {
           </div>
         )}
 
+        {inboundError && (
+          <div className="mb-3 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-[12px] text-amber">
+            {inboundError}
+            {inboundError.includes('expired') && (
+              <button
+                onClick={() => {
+                  setInboundError(null);
+                  void handleConnectGoogle();
+                }}
+                className="ml-2 underline hover:no-underline"
+              >
+                Reconnect Gmail
+              </button>
+            )}
+          </div>
+        )}
+
         {profile && (
           <div className="mb-3 flex flex-wrap items-center gap-1">
             {(
@@ -983,7 +1037,7 @@ export function EmailAgentPage({ backTo }: Props) {
                               <div className="flex items-center justify-between gap-2">
                                 <p className="truncate text-[12px] font-medium text-chalk">{name}</p>
                                 <span className="whitespace-nowrap text-[10px] text-chalk-faint">
-                                  {p.last_message_at ? new Date(p.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                  {p.last_message_at ? khiTime(p.last_message_at) : ''}
                                 </span>
                               </div>
                               <p className="truncate text-[11px] text-chalk-dim">
@@ -993,6 +1047,11 @@ export function EmailAgentPage({ backTo }: Props) {
                             {p.ai_agent_active && (
                               <span className="shrink-0 rounded-full border border-signal/30 bg-signal/10 px-1.5 py-0.25 text-[8px] text-signal">
                                 AI
+                              </span>
+                            )}
+                            {p.is_booked && (
+                              <span className="shrink-0 rounded-full border border-amber/40 bg-amber/10 px-1.5 py-0.25 text-[8px] text-amber">
+                                Booked
                               </span>
                             )}
                           </div>
@@ -1168,7 +1227,7 @@ export function EmailAgentPage({ backTo }: Props) {
                               : 'You';
                             const initial = (label.charAt(0) || '?').toUpperCase();
                             const time = msg.created_at
-                              ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                              ? khiTime(msg.created_at)
                               : '';
                             const isBooked = isSystem && msg.content.includes('Meeting booked');
                             return (

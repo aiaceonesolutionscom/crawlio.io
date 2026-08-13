@@ -330,15 +330,52 @@ Return JSON format:
 }}"""
 
 
+AUTO_REPLY_PROMPT_BOOKED = """You are the AI receptionist for {company_name}, a friendly, professional receptionist answering customer emails on behalf of that business.
+
+You are NOT a platform or software product. Always write as a person working for {company_name}. Never mention Crawlio, AI agents, receptionist software, or that you are an automated system unless the business context explicitly instructs you to.
+
+This customer has ALREADY booked a meeting with {company_name}.
+
+Business context:
+{business_context}
+
+Conversation history so far (oldest to newest):
+{history}
+
+The customer's latest reply:
+Customer: {incoming_message}
+
+Available meeting slots for rebooking (UTC ISO datetimes, choose ONLY from these or suggest one from these):
+{available_slots}
+
+Instructions:
+1. Stay warm and professional; the lead already has a booking with {company_name}.
+2. If the customer wants to RESCHEDULE or book ANOTHER meeting → action "rebook", pick the earliest suitable slot from the list and confirm it clearly.
+3. If the customer is giving FEEDBACK or asking service/business questions → answer helpfully, thank them, and invite more feedback → action "reply".
+4. For any other message → reply helpfully in 2-4 sentences → action "reply".
+5. If the customer explicitly asks to unsubscribe / stop emails / opt out → action "unsubscribe" and confirm politely and briefly.
+
+Return JSON format:
+{{
+    "action": "rebook" | "reply" | "unsubscribe",
+    "subject": "email subject line (Re: ...)",
+    "body": "reply body in plain text (no HTML)",
+    "interested": true/false,
+    "selected_slot": "UTC ISO datetime from the available list (or null)"
+}}"""
+
+
 async def _run_auto_reply_llm(
     business_context: str,
     history: str,
     incoming_message: str,
     company_name: str = "our team",
     available_slots: Optional[list[str]] = None,
+    booked: bool = False,
 ) -> dict:
     slots_text = "\n".join(f"  {s}" for s in (available_slots or [])) or "  (none available right now)"
-    full_prompt = AUTO_REPLY_PROMPT.format(
+    template = AUTO_REPLY_PROMPT_BOOKED if booked else AUTO_REPLY_PROMPT
+    full_prompt = template.format(
         company_name=company_name,
         business_context=business_context or "No business context provided.",
         history=history or "(empty)",
@@ -391,6 +428,46 @@ UNSUBSCRIBE_KEYWORDS = (
 def _is_unsubscribe_message(message: str) -> bool:
     lowered = (message or "").lower()
     return any(word in lowered for word in UNSUBSCRIBE_KEYWORDS)
+
+
+async def _is_lead_booked(
+    session: AsyncSession,
+    workspace_id: str,
+    conversation_id: str,
+    recipient: Optional[str] = None,
+) -> bool:
+    """True when this customer is already booked.
+
+    Checks BOTH (1) a booked Meeting row for the customer's email in this
+    workspace, and (2) the "Meeting booked!..." system message fallback on
+    this conversation. A split conversation history for the same customer
+    therefore still triggers the booked flow correctly."""
+    from sqlalchemy import func as sa_func
+    from app.db.models.agent import Meeting
+
+    if recipient:
+        result = await session.execute(
+            select(Meeting.id)
+            .where(
+                Meeting.workspace_id == workspace_id,
+                Meeting.status == "booked",
+                sa_func.lower(Meeting.lead_email) == recipient.lower(),
+            )
+            .limit(1)
+        )
+        if result.first() is not None:
+            return True
+
+    result = await session.execute(
+        select(EmailConversationMessage.id)
+        .where(
+            EmailConversationMessage.conversation_id == conversation_id,
+            EmailConversationMessage.sender_type == "system",
+            EmailConversationMessage.content.like("Meeting booked!%"),
+        )
+        .limit(1)
+    )
+    return result.first() is not None
 
 
 async def auto_respond_to_conversation(
@@ -448,6 +525,9 @@ async def auto_respond_to_conversation(
         booked = await meeting_service.list_bookable_meetings(session, conversation.workspace_id)
         available = meeting_service.next_slots(profile, count=4, bookable=booked)
     available_text = [s.isoformat() for s in available]
+    is_booked = await _is_lead_booked(
+        session, conversation.workspace_id, conversation.id, recipient
+    )
 
     await agent_realtime.publish_activity(
         session, conversation.workspace_id, "intent_detected",
@@ -473,6 +553,7 @@ async def auto_respond_to_conversation(
             incoming_message=incoming_message,
             company_name=company_name,
             available_slots=available_text,
+            booked=is_booked,
         )
 
     action = result.get("action") or ("reply" if not _is_unsubscribe_message(incoming_message) else "unsubscribe")
@@ -536,7 +617,7 @@ async def auto_respond_to_conversation(
     session.add(ai_msg)
 
     meeting_booked = False
-    if action == "book" and interested and profile:
+    if action in ("book", "rebook") and interested and profile:
         from app.services.email_conversation_service import book_meeting as crm_book
         import uuid as _uuid
         from zoneinfo import ZoneInfo
@@ -606,7 +687,7 @@ async def _is_inbound_processed(
             EmailConversationMessage.provider_message_id == provider_message_id,
         )
     )
-    return result.scalar_one_or_none() is not None
+    return result.first() is not None
 
 
 async def _store_inbound_message(
@@ -666,10 +747,10 @@ async def process_inbound_replies_for_account(
 
     # Cooldown: don't re-scan the same mailbox back-to-back (it hammers Gmail).
     now = datetime.now(timezone.utc)
-    last = _inbound_scan_guard.get(account_id)
+    last = inbound_scan_guard.get(account_id)
     if last and (now - last).total_seconds() < 25:
         return {"processed": 0, "results": [], "reason": "cooldown"}
-    _inbound_scan_guard[account_id] = now
+    inbound_scan_guard[account_id] = now
 
     account_result = await session.execute(
         select(EmailAccount).where(EmailAccount.id == account_id)
@@ -678,7 +759,28 @@ async def process_inbound_replies_for_account(
     if not account:
         raise RuntimeError("Email account not found")
 
-    inbox, _ = await email_sync_service.sync_inbox(session, account, page=1, page_size=20, max_total=20)
+    try:
+        inbox, _ = await email_sync_service.sync_inbox(session, account, page=1, page_size=20, max_total=20)
+    except Exception as exc:
+        # Gmail token refresh / IMAP / auth errors must surface as a clean
+        # signal, never as a masked 500 — the frontend turns these into a
+        # "reconnect your Gmail" prompt.
+        msg = str(exc).lower()
+        is_auth = (
+            "invalid_grant" in msg
+            or "unauthorized" in msg
+            or "401" in msg
+            or "token" in msg
+            or "oauth" in msg
+            or isinstance(exc, RuntimeError)
+        )
+        return {
+            "processed": 0,
+            "results": [],
+            "error": str(exc),
+            "reconnect_required": bool(is_auth),
+            "reason": "gmail_sync_failed",
+        }
 
     account_email = (account.email_address or "").lower()
     processed: list[dict] = []

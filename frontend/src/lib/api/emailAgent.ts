@@ -230,7 +230,13 @@ export function resumeAgent(token: string | null, conversationId: string) {
 }
 
 export function processInboundReplies(token: string | null, accountId: string) {
-  return apiFetch<{ processed: number; results: { conversation_id: string; result: any }[] }>(
+  return apiFetch<{
+    processed: number;
+    results: { conversation_id: string; result: any }[];
+    reconnect_required?: boolean;
+    reason?: string;
+    error?: string;
+  }>(
     `/api/v1/email-agent/process-inbound/${accountId}`, token, {
       method: 'POST',
     }
@@ -372,6 +378,7 @@ export interface ConversationPreviewDTO {
   last_message_at?: string | null;
   ai_agent_active: boolean;
   status: string;
+  is_booked?: boolean;
 }
 
 export interface ConversationPreviewListResponseDTO {

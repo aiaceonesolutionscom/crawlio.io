@@ -28,6 +28,22 @@ def _parse_hhmm(value: str) -> Optional[int]:
         return None
 
 
+def _as_tz(dt: datetime, tz: ZoneInfo) -> datetime:
+    """DB datetimes may be naive (SQLite strips tz) or aware (Postgres).
+    Naive stored values are local wall-clock in the profile's timezone."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _as_naive_local(dt: datetime) -> datetime:
+    """Normalize any stored datetime to a server-local naive value so
+    comparisons never mix aware and naive."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone().replace(tzinfo=None)
+
+
 def next_slots(
     profile: BusinessProfile,
     now: Optional[datetime] = None,
@@ -39,7 +55,7 @@ def next_slots(
     collide with already-booked meetings."""
     tz = ZoneInfo(profile.timezone) if profile.timezone else ZoneInfo("Asia/Karachi")
     now = (now or datetime.now(tz)).astimezone(tz)
-    bookable = [b.astimezone(tz) for b in (bookable or [])]
+    bookable = [_as_tz(b, tz) for b in (bookable or [])]
 
     slots: list[datetime] = []
     cursor = now.replace(minute=(now.minute // SLOT_MINUTES) * SLOT_MINUTES, second=0, microsecond=0)
@@ -108,5 +124,5 @@ async def list_bookable_meetings(session: AsyncSession, workspace_id: str) -> li
         )
     )
     meetings = list(result.scalars().all())
-    horizon = datetime.now().astimezone() + timedelta(days=DAYS_AHEAD + 1)
-    return [m.scheduled_at for m in meetings if m.scheduled_at and m.scheduled_at < horizon]
+    horizon = datetime.now() + timedelta(days=DAYS_AHEAD + 1)
+    return [m.scheduled_at for m in meetings if m.scheduled_at and _as_naive_local(m.scheduled_at) < horizon]

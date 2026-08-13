@@ -54,6 +54,9 @@ def clean_message_content(text: str) -> str:
         return ""
     t = text
     t = re.split(r"(?i)<blockquote", t)[0]
+    m = re.search(r"(?i)\bOn\b[^\n]*?\bwrote\s*:\s*(?:\n|$)?", t)
+    if m is not None:
+        t = t[: m.start()]
     t = re.sub(r"<br\s*/?>", "\n", t, flags=re.IGNORECASE)
     t = re.sub(r"</p\s*>", "\n", t, flags=re.IGNORECASE)
     t = re.sub(r"<[^>]+>", "", t)
@@ -81,7 +84,8 @@ def strip_email_quotes(body: str) -> str:
 
     cut_patterns = [
         # Gmail-style "On Tue, Aug 11, 2026 at 9:08 PM Ai AceOne <a@b.c> wrote:"
-        re.compile(r"(?i)\n\s*On\b[^\n]*?wrote\s*:?\s*\n?"),
+        # (no leading-newline requirement: the quoted thread is often inline)
+        re.compile(r"(?i)\bOn\b[^\n]*?\bwrote\s*:\s*(?:\n|$)?"),
         # Outlook "-----Original Message-----" / "-----Reply Message-----"
         re.compile(r"(?i)\n\s*[-_]{3,}\s*\n?\s*(Original Message|Reply Message)\s*[-_]{3,}"),
         # separator lines
@@ -544,6 +548,16 @@ async def list_conversation_previews(
     all_convs = list(conv_result.scalars().all())
     total = len(all_convs)
 
+    booked_ids = set(
+        (await session.execute(
+            select(EmailConversationMessage.conversation_id)
+            .where(
+                EmailConversationMessage.sender_type == "system",
+                EmailConversationMessage.content.like("Meeting booked!%"),
+            )
+        )).scalars().all()
+    )
+
     start = (page - 1) * page_size
     page_convs = all_convs[start:start + page_size]
 
@@ -565,6 +579,7 @@ async def list_conversation_previews(
             "last_message_at": (last.sent_at or last.created_at) if last else conv.updated_at,
             "ai_agent_active": conv.ai_agent_active,
             "status": conv.status,
+            "is_booked": conv.id in booked_ids,
         })
 
     return items, total, (start + page_size) < total

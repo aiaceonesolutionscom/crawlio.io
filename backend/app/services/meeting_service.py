@@ -96,19 +96,23 @@ async def book_meeting(
     lead_id: str,
     scheduled_at: datetime,
     conversation_id: Optional[str] = None,
+    whatsapp_conversation_id: Optional[str] = None,
     lead_name: str = "",
     lead_email: str = "",
+    lead_phone: Optional[str] = None,
 ) -> Meeting:
     booking_ref = f"BKG-{uuid.uuid4().hex[:8].upper()}"
     meeting = Meeting(
         workspace_id=workspace_id,
         lead_id=lead_id,
         conversation_id=conversation_id,
+        whatsapp_conversation_id=whatsapp_conversation_id,
         booking_ref=booking_ref,
         scheduled_at=scheduled_at,
         status="booked",
         lead_name=lead_name,
         lead_email=lead_email,
+        lead_phone=lead_phone,
     )
     session.add(meeting)
     return meeting

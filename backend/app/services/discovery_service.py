@@ -26,6 +26,7 @@ produced — never junk and never fabricated data.
 """
 import asyncio
 import logging
+from typing import Optional
 
 from app.core.config import settings
 from app.services import geo_service, overpass_service
@@ -48,7 +49,7 @@ class DiscoveryUnavailableError(Exception):
     pass
 
 
-def _clean_record(item: dict, niche: str, country_code: str) -> dict | None:
+def _clean_record(item: dict, niche: str, country_code: str) -> Optional[dict]:
     """Normalize one merged candidate into a valid lead, or drop it."""
     item = dict(item)
     if item.get("name"):

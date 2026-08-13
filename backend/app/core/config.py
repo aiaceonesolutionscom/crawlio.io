@@ -62,5 +62,19 @@ class Settings(BaseSettings):
     pro_daily_email_limit: int = 100
     enterprise_daily_email_limit: int = 500
 
+    # WhatsApp Business Platform (Meta Cloud API). Platform-level shared config:
+    # one Meta App backs every workspace; each workspace connects its own WABA +
+    # phone number via Embedded Signup or manual System User credentials.
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_graph_version: str = "v21.0"
+    whatsapp_webhook_url: str = ""
+    # Dev-only test number credentials (Meta API Setup tab; temporary 24h token).
+    whatsapp_test_phone_number_id: str = ""
+    whatsapp_test_access_token: str = ""
+    pro_daily_whatsapp_limit: int = 200
+    enterprise_daily_whatsapp_limit: int = 1000
+
 
 settings = Settings()

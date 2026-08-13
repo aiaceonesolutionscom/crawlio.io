@@ -18,6 +18,12 @@ from app.db.models.platform_admin import PlatformAdmin
 from app.db.models.sequence import Sequence, SequenceStep
 from app.db.models.system_setting import SystemSetting
 from app.db.models.workspace import Workspace, WorkspaceMember
+from app.db.models.whatsapp import (
+    WhatsAppAccount,
+    WhatsAppConversation,
+    WhatsAppConversationMessage,
+    WhatsAppTemplate,
+)
 
 __all__ = [
     "Workspace",
@@ -44,4 +50,8 @@ __all__ = [
     "SystemSetting",
     "AuditLog",
     "DiscoveryCache",
+    "WhatsAppAccount",
+    "WhatsAppConversation",
+    "WhatsAppConversationMessage",
+    "WhatsAppTemplate",
 ]

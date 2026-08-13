@@ -22,12 +22,14 @@ async def publish_activity(
     stage: str,
     status: str = "done",
     conversation_id: Optional[str] = None,
+    whatsapp_conversation_id: Optional[str] = None,
     detail: Optional[str] = None,
 ) -> None:
     session.add(
         AIActivity(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
+            whatsapp_conversation_id=whatsapp_conversation_id,
             stage=stage,
             status=status,
             detail=detail,
@@ -43,6 +45,7 @@ async def publish_activity(
                 "type": "ai_activity",
                 "workspace_id": workspace_id,
                 "conversation_id": conversation_id,
+                "whatsapp_conversation_id": whatsapp_conversation_id,
                 "stage": stage,
                 "status": status,
                 "detail": detail,

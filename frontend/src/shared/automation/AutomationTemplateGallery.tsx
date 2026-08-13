@@ -13,9 +13,10 @@ interface Template {
 
 interface Props {
   emailAgentPath: string;
+  whatsappAgentPath: string;
 }
 
-export function AutomationTemplateGallery({ emailAgentPath }: Props) {
+export function AutomationTemplateGallery({ emailAgentPath, whatsappAgentPath }: Props) {
   const TEMPLATES: Template[] = [
     {
       icon: MailIcon,
@@ -45,8 +46,9 @@ export function AutomationTemplateGallery({ emailAgentPath }: Props) {
     {
       icon: MessageSquareIcon,
       title: 'WhatsApp automation',
-      description: 'Automated WhatsApp follow-up sequences for new leads.',
-      available: false
+      description: 'Auto-respond and follow up with leads over WhatsApp.',
+      available: true,
+      to: whatsappAgentPath
     },
     {
       icon: RepeatIcon,

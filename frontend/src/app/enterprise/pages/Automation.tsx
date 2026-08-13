@@ -12,7 +12,7 @@ export function Automation() {
         description="Chain triggers, conditions and channel actions into a flow that works leads without a rep touching them." />
 
       <CrmBox />
-      <AutomationTemplateGallery emailAgentPath="/app/enterprise/automation/email-agent" />
+      <AutomationTemplateGallery emailAgentPath="/app/enterprise/automation/email-agent" whatsappAgentPath="/app/enterprise/automation/whatsapp-agent" />
       <AutomationFlow />
     </div>);
 

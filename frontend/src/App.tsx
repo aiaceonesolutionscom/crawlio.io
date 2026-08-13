@@ -43,6 +43,9 @@ const ProOverview = lazy(() => import('./app/pro/pages/Overview').then((m) => ({
 const ProLeads = lazy(() => import('./app/pro/pages/Leads').then((m) => ({ default: m.Leads })));
 const ProAutomation = lazy(() => import('./app/pro/pages/Automation').then((m) => ({ default: m.Automation })));
 const ProEmailAgent = lazy(() => import('./app/pro/pages/EmailAgent').then((m) => ({ default: m.EmailAgent })));
+const ProWhatsAppAgent = lazy(() =>
+  import('./app/pro/pages/WhatsAppAgent').then((m) => ({ default: m.WhatsAppAgent }))
+);
 const ProAnalytics = lazy(() => import('./app/pro/pages/Analytics').then((m) => ({ default: m.Analytics })));
 const ProTeam = lazy(() => import('./app/pro/pages/Team').then((m) => ({ default: m.Team })));
 const ProSettings = lazy(() => import('./app/pro/pages/Settings').then((m) => ({ default: m.Settings })));
@@ -53,6 +56,9 @@ const EnterpriseLeads = lazy(() => import('./app/enterprise/pages/Leads').then((
 const EnterpriseAutomation = lazy(() => import('./app/enterprise/pages/Automation').then((m) => ({ default: m.Automation })));
 const EnterpriseEmailAgent = lazy(() =>
   import('./app/enterprise/pages/EmailAgent').then((m) => ({ default: m.EmailAgent }))
+);
+const EnterpriseWhatsAppAgent = lazy(() =>
+  import('./app/enterprise/pages/WhatsAppAgent').then((m) => ({ default: m.WhatsAppAgent }))
 );
 const EnterpriseAnalytics = lazy(() => import('./app/enterprise/pages/Analytics').then((m) => ({ default: m.Analytics })));
 const EnterpriseTeam = lazy(() => import('./app/enterprise/pages/Team').then((m) => ({ default: m.Team })));
@@ -114,6 +120,7 @@ export function App() {
               <Route path="leads" element={<ProLeads />} />
               <Route path="automation" element={<ProAutomation />} />
               <Route path="automation/email-agent" element={<ProEmailAgent />} />
+              <Route path="automation/whatsapp-agent" element={<ProWhatsAppAgent />} />
               <Route path="analytics" element={<ProAnalytics />} />
               <Route path="team" element={<ProTeam />} />
               <Route path="settings" element={<ProSettings />} />
@@ -133,6 +140,7 @@ export function App() {
               <Route path="leads" element={<EnterpriseLeads />} />
               <Route path="automation" element={<EnterpriseAutomation />} />
               <Route path="automation/email-agent" element={<EnterpriseEmailAgent />} />
+              <Route path="automation/whatsapp-agent" element={<EnterpriseWhatsAppAgent />} />
               <Route path="analytics" element={<EnterpriseAnalytics />} />
               <Route path="team" element={<EnterpriseTeam />} />
               <Route path="settings" element={<EnterpriseSettings />} />

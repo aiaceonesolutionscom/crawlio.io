@@ -6,6 +6,7 @@ import { agentWsUrl, getAgentActivity, type ActivityDTO } from '../../lib/api/ag
 
 export interface LiveActivityEvent {
   conversation_id: string | null;
+  whatsapp_conversation_id: string | null;
   stage: string;
   status: string;
   detail: string | null;
@@ -24,6 +25,16 @@ const STAGE_LABELS: Record<string, string> = {
   meeting_booked: 'Meeting booked',
   crm_updated: 'Lead saved to CRM',
   outreach_sent: 'Outreach email sent',
+  wa_received: 'New inbound WhatsApp message',
+  wa_lead_identified: 'Identified WhatsApp lead',
+  wa_intent: 'Reading conversation + intent',
+  wa_unsubscribed: 'Opt-out requested by customer',
+  wa_reply_sent: 'WhatsApp reply sent',
+  wa_ai_stopped: 'AI stopped before send',
+  wa_meeting_booked: 'Meeting booked via WhatsApp',
+  wa_crm_updated: 'Lead saved to CRM',
+  wa_outreach_sent: 'WhatsApp outreach sent',
+  wa_outreach_template_pending: 'Template awaiting Meta approval',
 };
 
 export function ActivityPanel() {
@@ -89,7 +100,7 @@ export function ActivityPanel() {
     ...events,
     ...replay
       .filter((r) => !events.some((e) => e.created_at === r.created_at && e.stage === r.stage))
-      .map((r) => ({ conversation_id: r.conversation_id, stage: r.stage, status: r.status, detail: r.detail, created_at: r.created_at || '' })),
+      .map((r) => ({ conversation_id: r.conversation_id, whatsapp_conversation_id: r.whatsapp_conversation_id, stage: r.stage, status: r.status, detail: r.detail, created_at: r.created_at || '' })),
   ];
 
   return (

@@ -15,7 +15,8 @@ import re
 from typing import Optional
 
 # Source priority for merge conflicts: earlier sources win a field.
-_SOURCE_PRIORITY = ["google_maps", "directory", "openstreetmap", "web_search"]
+_SOURCE_PRIORITY = ["google_maps", "directory", "openstreetmap", "web_search",
+                    "wikidata", "wikipedia", "certtransparency", "dns"]
 
 
 def normalize_name(name: str) -> str:

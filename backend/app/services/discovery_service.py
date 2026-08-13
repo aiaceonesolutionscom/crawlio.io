@@ -31,10 +31,14 @@ from typing import Optional
 from app.core.config import settings
 from app.services import geo_service, overpass_service
 from app.services.crawlers import (
+    certtransparency_crawler,
+    dns_crawler,
     directory_scraper,
     lead_merger,
     lead_validator,
     maps_crawler,
+    wikidata_crawler,
+    wikipedia_crawler,
     web_search_service,
 )
 from app.services.contact_extraction import clean_business_name, is_own_website
@@ -88,22 +92,46 @@ async def _scrape_city_sources(
     per_source_counts, engaged) — engaged is True when at least one source
     actually returned something (vs. failing/empty).
 
-    `use_maps=False` skips the Google Maps crawler — real per-place page
-    visits, each with a human-pause, are by far the slowest part of a search
-    (tens of seconds) and are already covered for the *requested* city.
-    Nearby-city fallback trades that richness for speed: OSM + directories
-    alone finish in a few seconds, so trying 1-2 nearby cities stays fast
-    instead of multiplying the wait by however many cities get tried."""
-    tasks = [overpass_service.discover_businesses(niche, city, country, limit),
-             directory_scraper.search_businesses(niche, city, country, limit)]
+    Order of attempts (first to last):
+      1. Google Maps (primary, if use_maps=True) — richest data, slowest.
+      2. OSM/Overpass (structured POIs, free).
+      3. Free Pakistan directories (extra businesses, some emails).
+      4. Wikidata (structured entities from the linked open data cloud).
+      5. Wikipedia (articles about organizations/places in the niche).
+      6. CertTransparency (CT-log entries revealing organizational domains).
+      7. DNS (enumerated subdomains and hostnames).
+
+    `use_maps=False` skips the Google Maps crawler — nearby-city fallback
+    trades that richness for speed: OSM + directories alone finish in a few
+    seconds, so trying 1-2 nearby cities stays fast instead of multiplying
+    the wait by however many cities get tried."""
+    tasks = [
+        overpass_service.discover_businesses(niche, city, country, limit),
+        directory_scraper.search_businesses(niche, city, country, limit),
+    ]
     names = ["osm", "directory"]
+
     if use_maps:
         tasks.insert(0, maps_crawler.search_businesses(niche, city, country, limit))
         names.insert(0, "maps")
 
+    # New providers: Wikidata, Wikipedia, CertTransparency, DNS.
+    # These are added after the core three; they are lighter weight and
+    # serve as supplementary sources when the primary ones are thin.
+    tasks.extend([
+        wikidata_crawler.search_businesses(niche, city, country, limit),
+        wikipedia_crawler.search_businesses(niche, city, country, limit),
+        certtransparency_crawler.search_businesses(niche, city, country, limit),
+        dns_crawler.search_businesses(niche, city, country, limit),
+    ])
+    names.extend(["wikidata", "wikipedia", "certtransparency", "dns"])
+
     outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
-    source_counts: dict[str, int] = {"maps": 0, "osm": 0, "directory": 0}
+    source_counts: dict[str, int] = {
+        "maps": 0, "osm": 0, "directory": 0,
+        "wikidata": 0, "wikipedia": 0, "certtransparency": 0, "dns": 0,
+    }
     candidates: list[dict] = []
     engaged = False
     for name, outcome in zip(names, outcomes):

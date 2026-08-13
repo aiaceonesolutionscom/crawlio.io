@@ -1,5 +1,24 @@
 from app.db.models.audit_log import AuditLog
 from app.db.models.crm import CrmEntry
+from app.db.models.data_intelligence import (
+    CompanyPerson,
+    CrawlJob,
+    CrawlPage,
+    DataQualityScore,
+    EmailRecord,
+    EntityMatch,
+    EnrichmentRun,
+    FieldHistory,
+    IntentSignal,
+    Person,
+    PhoneRecord,
+    SocialProfile,
+    Source,
+    SourceEvidence,
+    Technographic,
+    VerificationResult,
+    VerifiedFlag,
+)
 from app.db.models.discovery_cache import DiscoveryCache
 from app.db.models.email import EmailMessage
 from app.db.models.email_account import (
@@ -54,4 +73,21 @@ __all__ = [
     "WhatsAppConversation",
     "WhatsAppConversationMessage",
     "WhatsAppTemplate",
+    "Source",
+    "SourceEvidence",
+    "EmailRecord",
+    "PhoneRecord",
+    "SocialProfile",
+    "Person",
+    "CompanyPerson",
+    "CrawlJob",
+    "CrawlPage",
+    "EnrichmentRun",
+    "VerificationResult",
+    "EntityMatch",
+    "DataQualityScore",
+    "FieldHistory",
+    "Technographic",
+    "IntentSignal",
+    "VerifiedFlag",
 ]

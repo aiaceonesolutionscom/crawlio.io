@@ -37,6 +37,14 @@ class Lead(Base):
     outreach_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     whatsapp_outreach_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     lead_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSON, nullable=True)
+    # Data-intelligence layer (Phase 1) — additive quality/freshness/provenance.
+    company_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    person_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    overall_quality_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    freshness_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

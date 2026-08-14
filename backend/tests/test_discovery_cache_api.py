@@ -1,10 +1,11 @@
-from app.services import discovery_service, enrichment_jobs
+from app.services.discovery import discovery_service
+from app.services.enrichment import enrichment_jobs
 
 
 async def test_discover_endpoint_caches_and_reuses_across_requests(client_factory, monkeypatch):
     call_count = {"n": 0}
 
-    async def fake_discover(niche, city, country, country_code="PK", limit=50):
+    async def fake_discover(niche, city, country, country_code="PK", limit=50, enrich_candidates=False, source_counts=None):
         call_count["n"] += 1
         return [{
             "name": "Acme Dental",
@@ -59,7 +60,7 @@ async def test_discover_endpoint_caches_and_reuses_across_requests(client_factor
 async def test_discover_endpoint_niche_synonym_reuses_same_cache(client_factory, monkeypatch):
     call_count = {"n": 0}
 
-    async def fake_discover(niche, city, country, country_code="PK", limit=50):
+    async def fake_discover(niche, city, country, country_code="PK", limit=50, enrich_candidates=False, source_counts=None):
         call_count["n"] += 1
         return [{
             "name": "Acme Dental", "phone": "+923001234567", "email": None, "website": None,

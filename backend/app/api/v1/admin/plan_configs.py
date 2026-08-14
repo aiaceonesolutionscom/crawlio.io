@@ -3,12 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.admin_deps import require_super_admin
+from app.core.admin_deps import require_permission
+from app.core.permissions import PERMISSION_PLAN_CONFIGS_READ, PERMISSION_PLAN_CONFIGS_WRITE
 from app.db.session import get_session
 from app.db.models.plan_config import PlanConfig
 from app.db.models.platform_admin import PlatformAdmin
 from app.schemas.admin import PlanConfigRead, PlanConfigUpdate
-from app.services import audit_service, plan_config_service
+from app.services.admin import audit_service, plan_config_service
 
 router = APIRouter(prefix="/plan-configs", tags=["admin:plan-configs"])
 
@@ -29,7 +30,7 @@ def _snapshot(config: PlanConfig) -> dict:
 
 @router.get("", response_model=list[PlanConfigRead])
 async def list_plan_configs(
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_PLAN_CONFIGS_READ))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
     return await plan_config_service.list_plan_configs(session)
@@ -39,7 +40,7 @@ async def list_plan_configs(
 async def update_plan_config(
     plan_key: str,
     payload: PlanConfigUpdate,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_PLAN_CONFIGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):

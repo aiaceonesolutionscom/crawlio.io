@@ -3,12 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.admin_deps import require_super_admin
+from app.core.admin_deps import require_permission
+from app.core.permissions import PERMISSION_SYSTEM_SETTINGS_READ, PERMISSION_SYSTEM_SETTINGS_WRITE
 from app.db.models.platform_admin import PlatformAdmin
 from app.db.models.system_setting import SystemSetting
 from app.db.session import get_session
 from app.schemas.admin import SystemSettingRead, SystemSettingUpsert
-from app.services import audit_service, system_setting_service
+from app.services.admin import audit_service, system_setting_service
 
 router = APIRouter(prefix="/system-settings", tags=["admin:system-settings"])
 
@@ -19,7 +20,7 @@ def _snapshot(setting: SystemSetting) -> dict:
 
 @router.get("", response_model=list[SystemSettingRead])
 async def list_system_settings(
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_SYSTEM_SETTINGS_READ))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
     return await system_setting_service.list_settings(session)
@@ -29,7 +30,7 @@ async def list_system_settings(
 async def upsert_system_setting(
     key: str,
     payload: SystemSettingUpsert,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_SYSTEM_SETTINGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):
@@ -59,7 +60,7 @@ async def upsert_system_setting(
 @router.delete("/{key}", status_code=204)
 async def delete_system_setting(
     key: str,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_SYSTEM_SETTINGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):

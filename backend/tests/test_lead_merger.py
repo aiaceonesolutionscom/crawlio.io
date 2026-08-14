@@ -1,5 +1,6 @@
-from app.services.crawlers import lead_merger
-from app.services.crawlers.lead_merger import merge_businesses, normalize_name
+from app.services.discovery.crawlers import lead_merger
+
+from app.services.discovery.crawlers.lead_merger import merge_businesses, normalize_name
 
 
 class TestNormalizeName:

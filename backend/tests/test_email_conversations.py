@@ -56,7 +56,8 @@ async def test_business_info_with_full_payload_passes_validation(client_factory)
 
 
 async def test_send_gmail_message_threads_with_thread_id():
-    from app.services.email_sync_service import send_gmail_message
+    from app.services.automation.email_sync_service import send_gmail_message
+
 
     with respx.mock:
         route = respx.post(
@@ -72,7 +73,8 @@ async def test_send_gmail_message_threads_with_thread_id():
 
 
 async def test_send_gmail_message_adds_in_reply_to_for_message_ids():
-    from app.services.email_sync_service import send_gmail_message
+    from app.services.automation.email_sync_service import send_gmail_message
+
 
     with respx.mock:
         route = respx.post(

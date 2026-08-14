@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.services import feature_flag_service
+from app.services.admin import feature_flag_service
 
 
 async def _create_workspace(client_factory, user_id: str) -> str:

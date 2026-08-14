@@ -1,7 +1,8 @@
 import respx
 from httpx import Response
 
-from app.services.crawlers import web_search_service
+from app.services.discovery.crawlers import web_search_service
+
 
 
 def _enable(monkeypatch, max_results=10):

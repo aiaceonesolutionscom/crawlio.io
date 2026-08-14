@@ -1,4 +1,4 @@
-from app.services import geo_service
+from app.services.discovery import geo_service
 
 
 class TestNearbyCities:

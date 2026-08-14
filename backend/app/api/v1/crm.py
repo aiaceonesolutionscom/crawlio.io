@@ -8,7 +8,7 @@ from app.db.session import get_session
 from app.db.models.workspace import Workspace
 from app.schemas.crm import CrmAddRequest, CrmAddResult, CrmEntryListResponse, CrmEntryRead, CrmImportFromConversationRequest
 from app.schemas.lead import lead_to_read
-from app.services import crm_service
+from app.services.crm import crm_service
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 

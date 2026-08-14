@@ -20,15 +20,12 @@ from app.schemas.discovery import (
     DiscoveryStatusResponse,
 )
 from app.schemas.lead import LeadCreate, lead_to_read
-from app.services import (
-    discovery_cache_service,
-    discovery_service,
-    enrichment_jobs,
-    enrichment_pipeline,
-    geo_service,
-)
-from app.services.lead_service import DuplicateLeadError, create_lead, find_existing_emails_and_phones
-from app.services.quota_service import count_discovery_leads_today
+from app.services.discovery import discovery_cache_service, discovery_service, geo_service
+from app.services.enrichment import enrichment_jobs, enrichment_pipeline
+from app.services.lead.lead_service import DuplicateLeadError, create_lead, find_existing_emails_and_phones
+
+from app.services.workspace.quota_service import count_discovery_leads_today
+
 from app.workers.tasks_enrichment import enrich_discovered_batch
 
 logger = logging.getLogger(__name__)
@@ -110,12 +107,15 @@ async def discover(
             )
 
     try:
+        counts: dict[str, int] = {}
         results = await discovery_service.discover_businesses(
             payload.niche,
             payload.city,
             country_name,
             country_code=payload.country,
             limit=fetch_limit,
+            enrich_candidates=enhanced,
+            source_counts=counts,
         )
     except discovery_service.DiscoveryUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
@@ -164,6 +164,7 @@ async def discover(
     return DiscoverResponse(
         items=items, total=len(items), limit=limit, enhanced=enhanced,
         daily_limit=daily_limit, remaining_today=remaining_today, search_id=search_id,
+        source_counts=counts,
     )
 
 

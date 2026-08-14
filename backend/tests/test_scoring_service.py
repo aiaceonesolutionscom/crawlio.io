@@ -3,7 +3,7 @@ import respx
 from httpx import Response
 
 from app.core.config import settings
-from app.services import scoring_service
+from app.services.lead import scoring_service
 
 
 async def test_score_lead_parses_response(monkeypatch):

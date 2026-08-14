@@ -1,7 +1,8 @@
 import pytest
 
-from app.services.crawlers import lead_validator
-from app.services.crawlers.lead_validator import (
+from app.services.discovery.crawlers import lead_validator
+
+from app.services.discovery.crawlers.lead_validator import (
     _has_mx,
     normalize_phone,
     validate_email,
@@ -52,6 +53,7 @@ class TestEmailValidation:
 
     def test_mx_check_gates_deliverability(self, monkeypatch):
         monkeypatch.setattr(lead_validator, "_has_mx", lambda d: d == "good.com")
+        monkeypatch.setattr(lead_validator, "settings", lead_validator.settings.model_copy(update={"validate_emails": True}))
         assert validate_email("info@good.com") == "info@good.com"
         assert validate_email("info@nodomain.com") is None
 

@@ -12,7 +12,7 @@ from app.schemas.email_account import (
     EmailDraftListResponse,
     EmailDraftUpdate,
 )
-from app.services import email_compose_service
+from app.services.automation import email_compose_service
 
 router = APIRouter(prefix="/email-drafts", tags=["email-drafts"])
 

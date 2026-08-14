@@ -12,7 +12,7 @@ from app.schemas.automation import (
     SequenceRead,
     SequenceStatusUpdate
 )
-from app.services import automation_service
+from app.services.automation import automation_service
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 

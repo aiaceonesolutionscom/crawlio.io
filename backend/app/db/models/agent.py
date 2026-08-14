@@ -49,11 +49,13 @@ class Meeting(Base):
     workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), nullable=False, index=True)
     lead_id: Mapped[str] = mapped_column(String(36), ForeignKey("leads.id"), nullable=False, index=True)
     conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_conversations.id"), nullable=True, index=True)
+    whatsapp_conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("whatsapp_conversations.id"), nullable=True, index=True)
     booking_ref: Mapped[str] = mapped_column(String(16), nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="booked")
     lead_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     lead_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    lead_phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     lead: Mapped["Lead"] = relationship()
@@ -69,6 +71,7 @@ class AIActivity(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), nullable=False, index=True)
     conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("email_conversations.id"), nullable=True, index=True)
+    whatsapp_conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("whatsapp_conversations.id"), nullable=True, index=True)
     stage: Mapped[str] = mapped_column(String(40), nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="done")  # running | done | failed
     detail: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)

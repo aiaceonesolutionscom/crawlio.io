@@ -1,7 +1,23 @@
+import asyncio
+
 import pytest
 
-from app.services import discovery_service
-from app.services.discovery_service import DiscoveryUnavailableError
+from app.services.discovery import discovery_service
+from app.services.discovery.discovery_service import DiscoveryUnavailableError
+
+
+@pytest.fixture(autouse=True)
+def _no_external_sources(monkeypatch):
+    """Nominatim POI search and Geoapify are real network sources. Discovery
+    orchestration tests focus on merge/validate logic, so stub them to [] by
+    default (any test can re-patch them to prove a specific behavior)."""
+    async def _empty(*args, **kwargs):
+        await asyncio.sleep(0)
+        return []
+
+    monkeypatch.setattr(discovery_service.geocoding_service, "search_places", _empty)
+    monkeypatch.setattr(discovery_service.geoapify_service, "search_businesses", _empty)
+
 
 
 @pytest.mark.asyncio
@@ -266,3 +282,90 @@ async def test_raises_when_all_sources_down(monkeypatch):
 
     with pytest.raises(DiscoveryUnavailableError):
         await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5)
+
+
+@pytest.mark.asyncio
+async def test_enrich_candidates_recovers_contact_less_leads(monkeypatch):
+    """Enhanced mode: name(+website)-only OSM/Geoapify candidates gain a real
+    contact channel via website lookup + scrape and qualify as leads — the fix
+    for "we only found 1 real listing with contact info"."""
+    async def fake_maps(*args, **kwargs):
+        return []
+
+    async def fake_osm(*args, **kwargs):
+        return [
+            {"name": "Smile Dental Studio", "website": "https://smiledental.pk",
+             "lat": 24.86, "lon": 67.0, "source": "openstreetmap"},
+            {"name": "No Site Clinic", "lat": 24.85, "lon": 67.01, "source": "openstreetmap"},
+        ]
+
+    async def fake_dir(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
+    monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_osm)
+    monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_dir)
+    monkeypatch.setattr(discovery_service.lead_validator.settings, "validate_emails", False)
+    monkeypatch.setattr(discovery_service.geo_service, "nearby_cities", lambda *a, **k: [])
+
+    async def fake_lookup(name, city, country):
+        if name == "No Site Clinic":
+            return "https://nosite.pk"
+        return None
+
+    monkeypatch.setattr(discovery_service.website_lookup_service, "find_business_website", fake_lookup)
+
+    async def fake_enrich(items, *, city, country, country_code, use_browser, use_ai, use_google_maps):
+        out = []
+        for item in items:
+            rec = dict(item)
+            if rec["name"] == "Smile Dental Studio":
+                rec["email"] = "info@smiledental.pk"
+            else:
+                rec["phone"] = "0300 7654321"
+                rec["website"] = "https://nosite.pk"
+            out.append(rec)
+        return out
+
+    monkeypatch.setattr("app.services.enrichment.enrichment_pipeline.enrich_items_batch", fake_enrich)
+
+    leads = await discovery_service.discover_businesses(
+        "Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5, enrich_candidates=True
+    )
+
+    assert len(leads) == 2
+    by_name = {l["name"]: l for l in leads}
+    assert by_name["Smile Dental Studio"]["email"] == "info@smiledental.pk"
+    assert by_name["No Site Clinic"]["phone"] == "+923007654321"
+
+
+@pytest.mark.asyncio
+async def test_enrich_candidates_off_by_default(monkeypatch):
+    """Free tier keeps the old behavior: contact-less candidates are dropped
+    and no website lookup / enrichment happens."""
+    async def fake_osm(*args, **kwargs):
+        return [{"name": "Ghost Business", "lat": 24.86, "lon": 67.0, "source": "openstreetmap"}]
+
+    async def fake_empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_osm)
+    monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.geo_service, "nearby_cities", lambda *a, **k: [])
+    monkeypatch.setattr(discovery_service.lead_validator.settings, "validate_emails", False)
+
+    called = {"lookup": 0}
+
+    async def fake_lookup(*args, **kwargs):
+        called["lookup"] += 1
+        return None
+
+    monkeypatch.setattr(discovery_service.website_lookup_service, "find_business_website", fake_lookup)
+
+    leads = await discovery_service.discover_businesses(
+        "Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5
+    )
+
+    assert leads == []
+    assert called["lookup"] == 0

@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.models.discovery_cache import DiscoveryCache
 from app.db.session import async_session_maker
-from app.services import discovery_cache_service, discovery_service
+from app.services.discovery import discovery_cache_service, discovery_service
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)

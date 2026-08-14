@@ -7,7 +7,7 @@ from app.core.deps import require_plan
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
 from app.schemas.analytics import AnalyticsOverview
-from app.services import analytics_service
+from app.services.analytics import analytics_service
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 

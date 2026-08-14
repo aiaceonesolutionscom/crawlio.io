@@ -1,3 +1,4 @@
+from app.db.models.admin_permission import AdminPermission
 from app.db.models.audit_log import AuditLog
 from app.db.models.crm import CrmEntry
 from app.db.models.discovery_cache import DiscoveryCache
@@ -17,6 +18,12 @@ from app.db.models.plan_config import PlanConfig
 from app.db.models.platform_admin import PlatformAdmin
 from app.db.models.sequence import Sequence, SequenceStep
 from app.db.models.system_setting import SystemSetting
+from app.db.models.whatsapp import (
+    WhatsAppAccount,
+    WhatsAppConversation,
+    WhatsAppConversationMessage,
+    WhatsAppTemplate,
+)
 from app.db.models.workspace import Workspace, WorkspaceMember
 
 __all__ = [
@@ -38,10 +45,15 @@ __all__ = [
     "Meeting",
     "AIActivity",
     "PlatformAdmin",
+    "AdminPermission",
     "PlanConfig",
     "FeatureFlag",
     "FeatureFlagOverride",
     "SystemSetting",
     "AuditLog",
     "DiscoveryCache",
+    "WhatsAppAccount",
+    "WhatsAppConversation",
+    "WhatsAppConversationMessage",
+    "WhatsAppTemplate",
 ]

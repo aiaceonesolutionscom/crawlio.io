@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from contextlib import asynccontextmanager
 
 # Playwright needs asyncio.create_subprocess_exec to launch Chromium, which only
 # works under Windows' ProactorEventLoop. Plain `python -m uvicorn` already
@@ -17,7 +18,18 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.middleware import PrivateNetworkAccessMiddleware
 
-app = FastAPI(title="Crawlio API")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Load any admin-set API-key overrides (system_settings.integration.*) into
+    # the in-process runtime cache so services pick them up at boot.
+    from app.services.admin import integration_service
+
+    await integration_service.hydrate_runtime_from_db()
+    yield
+
+
+app = FastAPI(title="Crawlio API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -31,8 +31,14 @@ class Settings(BaseSettings):
     # Optional proxy for the crawlers (anti-bot), e.g. "http://user:pass@host:port".
     proxy_url: str = ""
     directory_enabled: bool = True
-    # Email validation (MX lookup) — on, but can be disabled for offline test runs.
-    validate_emails: bool = True
+    # Geoapify Places — free OSM-based POI search (3k requests/day, no billing
+    # card). Additive; skipped entirely when geoapify_api_key is empty.
+    geoapify_api_key: str = ""
+    geoapify_enabled: bool = True
+    # Email validation (MX lookup) — OFF by default so out-of-the-box discovery
+    # is fast and has no DNS dependency (lookups add latency on large batches and
+    # can fail in restricted networks). Enable for stricter deliverability checks.
+    validate_emails: bool = False
 
     # Optional, opt-in last-resort top-up when Google Maps + OSM + directories
     # come up short (e.g. thinner markets outside major cities). Off by default:
@@ -61,6 +67,20 @@ class Settings(BaseSettings):
     email_token_encryption_key: str = ""
     pro_daily_email_limit: int = 100
     enterprise_daily_email_limit: int = 500
+
+    # WhatsApp Business Platform (Meta Cloud API). Platform-level shared config:
+    # one Meta App backs every workspace; each workspace connects its own WABA +
+    # phone number via Embedded Signup or manual System User credentials.
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_graph_version: str = "v21.0"
+    whatsapp_webhook_url: str = ""
+    # Dev-only test number credentials (Meta API Setup tab; temporary 24h token).
+    whatsapp_test_phone_number_id: str = ""
+    whatsapp_test_access_token: str = ""
+    pro_daily_whatsapp_limit: int = 200
+    enterprise_daily_whatsapp_limit: int = 1000
 
 
 settings = Settings()

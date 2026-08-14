@@ -1,0 +1,1 @@
+export { Workspaces } from '../../super-admin/pages/Workspaces';

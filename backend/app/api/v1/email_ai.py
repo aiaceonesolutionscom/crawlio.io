@@ -10,7 +10,7 @@ from app.schemas.email_account import (
     EmailAIGenerateRequest,
     EmailDraftRead,
 )
-from app.services import email_ai_service
+from app.services.automation import email_ai_service
 
 router = APIRouter(prefix="/email-ai", tags=["email-ai"])
 

@@ -8,55 +8,61 @@ import { Signup } from './pages/Signup';
 import { SelectPlan } from './pages/SelectPlan';
 import { RequireAuth } from './routes/RequireAuth';
 import { RequirePlan } from './routes/RequirePlan';
-import { RequireSuperAdmin } from './routes/RequireSuperAdmin';
+import { RequireAdmin } from './routes/RequireAdmin';
 import { PlanRedirect } from './routes/PlanRedirect';
 import { AdminSessionProvider } from './contexts/AdminSessionContext';
 
 // Admin is its own lazy chunk, entirely separate from the tier bundles below —
 // a normal customer session never downloads it.
-const AdminLayout = lazy(() => import('./admin/AdminLayout').then((m) => ({ default: m.AdminLayout })));
-const AdminDashboard = lazy(() => import('./admin/pages/Dashboard').then((m) => ({ default: m.Dashboard })));
-const AdminWorkspaces = lazy(() => import('./admin/pages/Workspaces').then((m) => ({ default: m.Workspaces })));
-const AdminPlanConfigs = lazy(() => import('./admin/pages/PlanConfigs').then((m) => ({ default: m.PlanConfigs })));
-const AdminPlatformAdmins = lazy(() =>
-  import('./admin/pages/PlatformAdmins').then((m) => ({ default: m.PlatformAdmins }))
+const AdminHomeRedirect = lazy(() =>
+  import('./admin/AdminHomeRedirect').then((m) => ({ default: m.AdminHomeRedirect }))
 );
-const AdminAuditLog = lazy(() => import('./admin/pages/AuditLog').then((m) => ({ default: m.AuditLog })));
+const SuperAdminLayout = lazy(() =>
+  import('./admin/super-admin/SuperAdminLayout').then((m) => ({ default: m.SuperAdminLayout }))
+);
+const SubAdminLayout = lazy(() =>
+  import('./admin/sub-admin/SubAdminLayout').then((m) => ({ default: m.SubAdminLayout }))
+);
+const AdminDashboard = lazy(() => import('./admin/super-admin/pages/Dashboard').then((m) => ({ default: m.Dashboard })));
+const AdminWorkspaces = lazy(() =>
+  import('./admin/super-admin/pages/Workspaces').then((m) => ({ default: m.Workspaces }))
+);
+const AdminPlanConfigs = lazy(() =>
+  import('./admin/super-admin/pages/PlanConfigs').then((m) => ({ default: m.PlanConfigs }))
+);
+const AdminPlatformAdmins = lazy(() =>
+  import('./admin/super-admin/pages/PlatformAdmins').then((m) => ({ default: m.PlatformAdmins }))
+);
+const AdminAuditLog = lazy(() => import('./admin/super-admin/pages/AuditLog').then((m) => ({ default: m.AuditLog })));
 const AdminFeatureFlags = lazy(() =>
-  import('./admin/pages/FeatureFlags').then((m) => ({ default: m.FeatureFlags }))
+  import('./admin/super-admin/pages/FeatureFlags').then((m) => ({ default: m.FeatureFlags }))
 );
 const AdminSystemSettings = lazy(() =>
-  import('./admin/pages/SystemSettings').then((m) => ({ default: m.SystemSettings }))
+  import('./admin/super-admin/pages/SystemSettings').then((m) => ({ default: m.SystemSettings }))
+);
+const AdminIntegrations = lazy(() =>
+  import('./admin/super-admin/pages/Integrations').then((m) => ({ default: m.Integrations }))
+);
+const SubAdminDashboard = lazy(() => import('./admin/sub-admin/pages/Dashboard').then((m) => ({ default: m.Dashboard })));
+const SubAdminWorkspaces = lazy(() =>
+  import('./admin/sub-admin/pages/Workspaces').then((m) => ({ default: m.Workspaces }))
+);
+const SubAdminAuditLog = lazy(() => import('./admin/sub-admin/pages/AuditLog').then((m) => ({ default: m.AuditLog })));
+const SubAdminIntegrations = lazy(() =>
+  import('./admin/sub-admin/pages/Integrations').then((m) => ({ default: m.Integrations }))
 );
 
-// Each tier is its own lazy chunk: a Free session never downloads Pro/Enterprise code.
-const FreeLayout = lazy(() => import('./app/free/FreeLayout').then((m) => ({ default: m.FreeLayout })));
-const FreeOverview = lazy(() => import('./app/free/pages/Overview').then((m) => ({ default: m.Overview })));
-const FreeLeads = lazy(() => import('./app/free/pages/Leads').then((m) => ({ default: m.Leads })));
-const FreeAutomation = lazy(() => import('./app/free/pages/Automation').then((m) => ({ default: m.Automation })));
-const FreeAnalytics = lazy(() => import('./app/free/pages/Analytics').then((m) => ({ default: m.Analytics })));
-const FreeTeam = lazy(() => import('./app/free/pages/Team').then((m) => ({ default: m.Team })));
-const FreeSettings = lazy(() => import('./app/free/pages/Settings').then((m) => ({ default: m.Settings })));
-
-const ProLayout = lazy(() => import('./app/pro/ProLayout').then((m) => ({ default: m.ProLayout })));
-const ProOverview = lazy(() => import('./app/pro/pages/Overview').then((m) => ({ default: m.Overview })));
-const ProLeads = lazy(() => import('./app/pro/pages/Leads').then((m) => ({ default: m.Leads })));
-const ProAutomation = lazy(() => import('./app/pro/pages/Automation').then((m) => ({ default: m.Automation })));
-const ProEmailAgent = lazy(() => import('./app/pro/pages/EmailAgent').then((m) => ({ default: m.EmailAgent })));
-const ProAnalytics = lazy(() => import('./app/pro/pages/Analytics').then((m) => ({ default: m.Analytics })));
-const ProTeam = lazy(() => import('./app/pro/pages/Team').then((m) => ({ default: m.Team })));
-const ProSettings = lazy(() => import('./app/pro/pages/Settings').then((m) => ({ default: m.Settings })));
-
-const EnterpriseLayout = lazy(() => import('./app/enterprise/EnterpriseLayout').then((m) => ({ default: m.EnterpriseLayout })));
-const EnterpriseOverview = lazy(() => import('./app/enterprise/pages/Overview').then((m) => ({ default: m.Overview })));
-const EnterpriseLeads = lazy(() => import('./app/enterprise/pages/Leads').then((m) => ({ default: m.Leads })));
-const EnterpriseAutomation = lazy(() => import('./app/enterprise/pages/Automation').then((m) => ({ default: m.Automation })));
-const EnterpriseEmailAgent = lazy(() =>
-  import('./app/enterprise/pages/EmailAgent').then((m) => ({ default: m.EmailAgent }))
-);
-const EnterpriseAnalytics = lazy(() => import('./app/enterprise/pages/Analytics').then((m) => ({ default: m.Analytics })));
-const EnterpriseTeam = lazy(() => import('./app/enterprise/pages/Team').then((m) => ({ default: m.Team })));
-const EnterpriseSettings = lazy(() => import('./app/enterprise/pages/Settings').then((m) => ({ default: m.Settings })));
+// Single parameterized dashboard chunk. A Free session only ever renders the
+// locked/limited variants of the same pages — no duplicated tier code.
+const DashboardLayout = lazy(() => import('./app/dashboard/DashboardLayout').then((m) => ({ default: m.DashboardLayout })));
+const DashboardOverview = lazy(() => import('./app/dashboard/pages/Overview').then((m) => ({ default: m.Overview })));
+const DashboardLeads = lazy(() => import('./app/dashboard/pages/Leads').then((m) => ({ default: m.Leads })));
+const DashboardAutomation = lazy(() => import('./app/dashboard/pages/Automation').then((m) => ({ default: m.Automation })));
+const DashboardEmailAgent = lazy(() => import('./app/dashboard/pages/EmailAgent').then((m) => ({ default: m.EmailAgent })));
+const DashboardWhatsAppAgent = lazy(() => import('./app/dashboard/pages/WhatsAppAgent').then((m) => ({ default: m.WhatsAppAgent })));
+const DashboardAnalytics = lazy(() => import('./app/dashboard/pages/Analytics').then((m) => ({ default: m.Analytics })));
+const DashboardTeam = lazy(() => import('./app/dashboard/pages/Team').then((m) => ({ default: m.Team })));
+const DashboardSettings = lazy(() => import('./app/dashboard/pages/Settings').then((m) => ({ default: m.Settings })));
 
 function TierFallback() {
   return <div className="flex min-h-screen w-full items-center justify-center bg-ink-950 text-chalk-faint text-[13px]">Loading…</div>;
@@ -87,17 +93,17 @@ export function App() {
               element={
               <RequireAuth>
                   <RequirePlan tier="free">
-                    <FreeLayout />
+                    <DashboardLayout tier="free" />
                   </RequirePlan>
                 </RequireAuth>
               }>
 
-              <Route index element={<FreeOverview />} />
-              <Route path="leads" element={<FreeLeads />} />
-              <Route path="automation" element={<FreeAutomation />} />
-              <Route path="analytics" element={<FreeAnalytics />} />
-              <Route path="team" element={<FreeTeam />} />
-              <Route path="settings" element={<FreeSettings />} />
+              <Route index element={<DashboardOverview tier="free" />} />
+              <Route path="leads" element={<DashboardLeads tier="free" />} />
+              <Route path="automation" element={<DashboardAutomation tier="free" />} />
+              <Route path="analytics" element={<DashboardAnalytics tier="free" />} />
+              <Route path="team" element={<DashboardTeam tier="free" />} />
+              <Route path="settings" element={<DashboardSettings tier="free" />} />
             </Route>
 
             <Route
@@ -105,18 +111,19 @@ export function App() {
               element={
               <RequireAuth>
                   <RequirePlan tier="pro">
-                    <ProLayout />
+                    <DashboardLayout tier="pro" />
                   </RequirePlan>
                 </RequireAuth>
               }>
 
-              <Route index element={<ProOverview />} />
-              <Route path="leads" element={<ProLeads />} />
-              <Route path="automation" element={<ProAutomation />} />
-              <Route path="automation/email-agent" element={<ProEmailAgent />} />
-              <Route path="analytics" element={<ProAnalytics />} />
-              <Route path="team" element={<ProTeam />} />
-              <Route path="settings" element={<ProSettings />} />
+              <Route index element={<DashboardOverview tier="pro" />} />
+              <Route path="leads" element={<DashboardLeads tier="pro" />} />
+              <Route path="automation" element={<DashboardAutomation tier="pro" />} />
+              <Route path="automation/email-agent" element={<DashboardEmailAgent tier="pro" />} />
+              <Route path="automation/whatsapp-agent" element={<DashboardWhatsAppAgent tier="pro" />} />
+              <Route path="analytics" element={<DashboardAnalytics tier="pro" />} />
+              <Route path="team" element={<DashboardTeam tier="pro" />} />
+              <Route path="settings" element={<DashboardSettings tier="pro" />} />
             </Route>
 
             <Route
@@ -124,18 +131,19 @@ export function App() {
               element={
               <RequireAuth>
                   <RequirePlan tier="enterprise">
-                    <EnterpriseLayout />
+                    <DashboardLayout tier="enterprise" />
                   </RequirePlan>
                 </RequireAuth>
               }>
 
-              <Route index element={<EnterpriseOverview />} />
-              <Route path="leads" element={<EnterpriseLeads />} />
-              <Route path="automation" element={<EnterpriseAutomation />} />
-              <Route path="automation/email-agent" element={<EnterpriseEmailAgent />} />
-              <Route path="analytics" element={<EnterpriseAnalytics />} />
-              <Route path="team" element={<EnterpriseTeam />} />
-              <Route path="settings" element={<EnterpriseSettings />} />
+              <Route index element={<DashboardOverview tier="enterprise" />} />
+              <Route path="leads" element={<DashboardLeads tier="enterprise" />} />
+              <Route path="automation" element={<DashboardAutomation tier="enterprise" />} />
+              <Route path="automation/email-agent" element={<DashboardEmailAgent tier="enterprise" />} />
+              <Route path="automation/whatsapp-agent" element={<DashboardWhatsAppAgent tier="enterprise" />} />
+              <Route path="analytics" element={<DashboardAnalytics tier="enterprise" />} />
+              <Route path="team" element={<DashboardTeam tier="enterprise" />} />
+              <Route path="settings" element={<DashboardSettings tier="enterprise" />} />
             </Route>
 
             <Route
@@ -143,9 +151,22 @@ export function App() {
               element={
                 <RequireAuth>
                   <AdminSessionProvider>
-                    <RequireSuperAdmin>
-                      <AdminLayout />
-                    </RequireSuperAdmin>
+                    <RequireAdmin>
+                      <AdminHomeRedirect />
+                    </RequireAdmin>
+                  </AdminSessionProvider>
+                </RequireAuth>
+              }
+            />
+
+            <Route
+              path="/admin/super-admin"
+              element={
+                <RequireAuth>
+                  <AdminSessionProvider>
+                    <RequireAdmin>
+                      <SuperAdminLayout />
+                    </RequireAdmin>
                   </AdminSessionProvider>
                 </RequireAuth>
               }
@@ -157,6 +178,25 @@ export function App() {
               <Route path="audit-log" element={<AdminAuditLog />} />
               <Route path="feature-flags" element={<AdminFeatureFlags />} />
               <Route path="system-settings" element={<AdminSystemSettings />} />
+              <Route path="integrations" element={<AdminIntegrations />} />
+            </Route>
+
+            <Route
+              path="/admin/sub-admin"
+              element={
+                <RequireAuth>
+                  <AdminSessionProvider>
+                    <RequireAdmin>
+                      <SubAdminLayout />
+                    </RequireAdmin>
+                  </AdminSessionProvider>
+                </RequireAuth>
+              }
+            >
+              <Route index element={<SubAdminDashboard />} />
+              <Route path="workspaces" element={<SubAdminWorkspaces />} />
+              <Route path="audit-log" element={<SubAdminAuditLog />} />
+              <Route path="integrations" element={<SubAdminIntegrations />} />
             </Route>
 
             <Route path="/dashboard/*" element={<Navigate to="/app" replace />} />

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 import app.db.models  # noqa: F401 (populates Base.metadata)
-from app.core.admin_deps import require_super_admin
+from app.core.admin_deps import get_current_admin
 from app.core.deps import get_current_user_id
 from app.db.base import Base
 from app.db.models.plan_config import PlanConfig
@@ -27,7 +27,8 @@ def _reset_provider_circuit_breakers():
     it, one test tripping a breaker would leave it open for every test that runs
     afterward in the same process, since the cooldown is measured in wall-clock
     seconds."""
-    from app.services.crawlers import directory_scraper, maps_crawler
+    from app.services.discovery.crawlers import directory_scraper, maps_crawler
+
 
     maps_crawler._breaker._blocked_until = 0.0
     maps_crawler._breaker._consecutive_failures = 0
@@ -47,7 +48,8 @@ def _reset_mx_cache():
     timeout under load) DNS result for a domain like example.com would
     otherwise leak into every other test that validates an email on the same
     domain, regardless of test order."""
-    from app.services.crawlers import lead_validator
+    from app.services.discovery.crawlers import lead_validator
+
 
     lead_validator._MX_CACHE.clear()
     yield
@@ -160,14 +162,14 @@ async def client_factory(db_engine):
 
 @pytest.fixture
 async def admin_client(db_engine):
-    """Client authenticated as a seeded PlatformAdmin, for /admin/* routes.
-    Bypasses JWT verification entirely by overriding require_super_admin
+    """Client authenticated as a seeded Super Admin, for /admin/* routes.
+    Bypasses JWT verification entirely by overriding get_current_admin
     directly — resolve_or_bootstrap's claims-based lookup is already covered
     by test_whoami.py, so admin routes don't need to re-prove that path."""
     session_maker = async_sessionmaker(db_engine, expire_on_commit=False)
     now = datetime.now(timezone.utc)
     async with session_maker() as session:
-        admin = PlatformAdmin(email=TEST_ADMIN_EMAIL, is_active=True, created_at=now)
+        admin = PlatformAdmin(email=TEST_ADMIN_EMAIL, is_active=True, role="super_admin", created_at=now)
         session.add(admin)
         await session.commit()
         await session.refresh(admin)
@@ -176,7 +178,7 @@ async def admin_client(db_engine):
         async with session_maker() as session:
             yield session
 
-    async def override_require_super_admin():
+    async def override_get_current_admin():
         async with session_maker() as session:
             result = await session.execute(
                 select(PlatformAdmin).where(PlatformAdmin.email == TEST_ADMIN_EMAIL)
@@ -184,7 +186,7 @@ async def admin_client(db_engine):
             return result.scalar_one()
 
     app.dependency_overrides[get_session] = override_get_session
-    app.dependency_overrides[require_super_admin] = override_require_super_admin
+    app.dependency_overrides[get_current_admin] = override_get_current_admin
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

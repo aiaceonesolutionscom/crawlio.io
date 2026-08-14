@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.api.v1 import analytics, agent, automation, crm, discovery, email_accounts, email_agent, email_ai, email_conversations, email_drafts, geo, leads, team, webhooks, workspaces, ws
+from app.api.v1 import analytics, agent, automation, crm, discovery, email_accounts, email_agent, email_ai, email_conversations, email_drafts, geo, leads, team, webhooks, whatsapp_accounts, whatsapp_conversations, whatsapp_outreach, workspaces, ws
 from app.api.v1.admin import admin_router
 from app.core.deps import get_current_user_id
 
@@ -17,6 +17,9 @@ api_router.include_router(email_drafts.router)
 api_router.include_router(email_ai.router)
 api_router.include_router(email_agent.router)
 api_router.include_router(email_conversations.router)
+api_router.include_router(whatsapp_accounts.router)
+api_router.include_router(whatsapp_conversations.router)
+api_router.include_router(whatsapp_outreach.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(analytics.router)
 api_router.include_router(team.router)

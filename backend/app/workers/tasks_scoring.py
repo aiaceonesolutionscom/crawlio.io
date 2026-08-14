@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.db.models.lead import Lead
 from app.db.session import async_session_maker
-from app.services import lead_service, scoring_service
+from app.services.lead import lead_service, scoring_service
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)

@@ -34,7 +34,8 @@ async def agent_events_ws(websocket: WebSocket) -> None:
         user_id = claims["sub"]
 
         from app.db.session import async_session_maker
-        from app.services.workspace_service import get_workspace_for_user
+        from app.services.workspace.workspace_service import get_workspace_for_user
+
 
         async with async_session_maker() as session:
             workspace = await get_workspace_for_user(session, user_id)

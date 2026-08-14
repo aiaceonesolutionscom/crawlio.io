@@ -8,6 +8,9 @@ export interface AdminWorkspaceDTO {
   seat_quota: number;
   webhook_token: string;
   created_at: string;
+  member_count: number;
+  lead_count: number;
+  email_count: number;
 }
 
 export interface AdminWorkspaceUpdateInput {

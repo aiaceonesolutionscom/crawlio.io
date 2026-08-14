@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.db.models.lead import Lead
 from app.db.models.workspace import Workspace, WorkspaceMember
 from app.schemas.lead import LeadCreate
-from app.services import lead_service
+from app.services.lead import lead_service
 from app.workers import tasks_scoring
 
 

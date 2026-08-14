@@ -21,7 +21,7 @@ from app.schemas.email_account import (
     CSVExportResponse,
     EmailQuotaRead,
 )
-from app.services import email_conversation_service, email_account_service
+from app.services.automation import email_conversation_service, email_account_service
 
 router = APIRouter(prefix="/email-conversations", tags=["email-conversations"])
 
@@ -127,7 +127,8 @@ async def get_conversation(
 ):
     from sqlalchemy import func, select
     from app.db.models.email_account import EmailConversation, EmailConversationMessage
-    from app.services.email_conversation_service import clean_message_content
+    from app.services.automation.email_conversation_service import clean_message_content
+
     result = await session.execute(
         select(EmailConversation).where(
             EmailConversation.id == conversation_id,

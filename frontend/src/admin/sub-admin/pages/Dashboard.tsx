@@ -1,0 +1,1 @@
+export { Dashboard } from '../../super-admin/pages/Dashboard';

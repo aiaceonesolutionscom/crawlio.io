@@ -1,6 +1,6 @@
 import pytest
 
-from app.services import enrichment_pipeline
+from app.services.enrichment import enrichment_pipeline
 
 
 @pytest.mark.asyncio

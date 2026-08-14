@@ -7,7 +7,7 @@ from app.core.deps import get_current_user_id, get_current_workspace
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
 from app.schemas.workspace import WorkspaceCreate, WorkspacePlanUpdate, WorkspaceRead
-from app.services import quota_service, workspace_service
+from app.services.workspace import quota_service, workspace_service
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 

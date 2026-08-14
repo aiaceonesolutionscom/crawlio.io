@@ -51,6 +51,7 @@ export interface MeetingDTO {
 export interface ActivityDTO {
   id: string;
   conversation_id: string | null;
+  whatsapp_conversation_id: string | null;
   stage: string;
   status: string;
   detail: string | null;

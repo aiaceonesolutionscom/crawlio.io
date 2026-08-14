@@ -14,6 +14,9 @@ DIRECTORY_DOMAINS: set[str] = {
     # Pakistan-specific marketplaces/portals
     "zameen.com", "olx.com.pk", "olx.com", "pakwheels.com", "daraz.pk",
     "rozee.pk", "opensooq.com", "bayut.com", "propertyfinder.com",
+    # Pakistan medical/dental directories (common DuckDuckGo results)
+    "marham.pk", "oladoc.com", "dentists10.com", "hamariweb.com",
+    "digicard.pk", "ekatlang.com", "findandrate.pk", "drmed.pk",
     # General classifieds/marketplaces
     "craigslist.org", "mercadolibre.com", "alibaba.com", "aliexpress.com",
     "amazon.com", "ebay.com", "indiamart.com", "tradeindia.com", "sulekha.com",

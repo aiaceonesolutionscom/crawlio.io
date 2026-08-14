@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import verify_clerk_jwt
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
-from app.services import plan_config_service
-from app.services.workspace_service import get_workspace_for_user
+from app.services.admin import plan_config_service
+from app.services.workspace.workspace_service import get_workspace_for_user
+
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

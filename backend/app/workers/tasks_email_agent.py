@@ -48,7 +48,7 @@ async def _sync_email_account_async(account_id: str) -> None:
     from sqlalchemy import select
     from app.db.session import async_session_maker
     from app.db.models.email_account import EmailAccount
-    from app.services import email_sync_service
+    from app.services.automation import email_sync_service
 
     async with async_session_maker() as session:
         result = await session.execute(
@@ -89,7 +89,8 @@ async def _send_approved_email_async(draft_id: str) -> None:
     from sqlalchemy import select
     from app.db.session import async_session_maker
     from app.db.models.email_account import EmailDraft
-    from app.services.email_compose_service import send_draft
+    from app.services.automation.email_compose_service import send_draft
+
 
     async with async_session_maker() as session:
         result = await session.execute(

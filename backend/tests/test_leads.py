@@ -244,8 +244,9 @@ async def test_whatsapp_requires_pro_plan(client_factory, monkeypatch):
 
 
 async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch):
-    from app.services import website_scraper_service
-    from app.services.crawlers import lead_validator
+    from app.services.discovery import website_scraper_service
+    from app.services.discovery.crawlers import lead_validator
+
     from app.workers.tasks_enrichment import enrich_lead
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
@@ -287,7 +288,7 @@ async def test_enrich_leads_fills_gaps_from_website(client_factory, monkeypatch)
 
 
 async def test_enrich_leads_does_not_overwrite_existing_data(client_factory, monkeypatch):
-    from app.services import website_scraper_service
+    from app.services.discovery import website_scraper_service
     from app.workers.tasks_enrichment import enrich_lead
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)
@@ -322,7 +323,7 @@ async def test_enrich_leads_does_not_overwrite_existing_data(client_factory, mon
 async def test_enrich_leads_dispatches_to_background_worker_when_available(client_factory, monkeypatch):
     """When the worker IS reachable, /enrich should just dispatch — no
     synchronous website scrape should happen in the request at all."""
-    from app.services import enrichment_pipeline
+    from app.services.enrichment import enrichment_pipeline
     from app.workers.tasks_enrichment import enrich_lead
 
     monkeypatch.setattr(score_lead_task, "delay", lambda lead_id: None)

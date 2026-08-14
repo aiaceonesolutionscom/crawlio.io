@@ -1,6 +1,7 @@
 import pytest
 
-from app.services.crawlers import directory_scraper
+from app.services.discovery.crawlers import directory_scraper
+
 
 LISTING_HTML = """
 <html><body>

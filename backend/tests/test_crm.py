@@ -1,4 +1,4 @@
-from app.services import enrichment_pipeline
+from app.services.enrichment import enrichment_pipeline
 from app.workers.tasks_enrichment import enrich_lead
 from app.workers.tasks_scoring import score_lead_task
 

@@ -1,4 +1,5 @@
-from app.services import discovery_service, enrichment_jobs, enrichment_pipeline
+from app.services.discovery import discovery_service
+from app.services.enrichment import enrichment_jobs, enrichment_pipeline
 from app.workers.tasks_scoring import score_lead_task
 
 
@@ -9,7 +10,7 @@ def _fake_job_store_unavailable():
 
 
 async def test_already_imported_lead_is_flagged_on_fresh_search(client_factory, monkeypatch):
-    async def fake_discover(niche, city, country, country_code="PK", limit=50):
+    async def fake_discover(niche, city, country, country_code="PK", limit=50, enrich_candidates=False, source_counts=None):
         return [
             {"name": "Acme Dental", "phone": "+923001234567", "email": "info@acme.pk", "source": "google_maps", "social_links": {}, "lat": 24.8, "lon": 67.0},
             {"name": "New Clinic", "phone": "+923009999999", "email": "hi@newclinic.pk", "source": "google_maps", "social_links": {}, "lat": 24.8, "lon": 67.0},
@@ -37,7 +38,7 @@ async def test_already_imported_lead_is_flagged_on_fresh_search(client_factory, 
 
 
 async def test_already_imported_flag_matches_by_phone_too(client_factory, monkeypatch):
-    async def fake_discover(niche, city, country, country_code="PK", limit=50):
+    async def fake_discover(niche, city, country, country_code="PK", limit=50, enrich_candidates=False, source_counts=None):
         return [{"name": "Acme Dental", "phone": "+923001234567", "email": None, "source": "google_maps", "social_links": {}, "lat": 24.8, "lon": 67.0}]
 
     monkeypatch.setattr(discovery_service, "discover_businesses", fake_discover)
@@ -61,7 +62,7 @@ async def test_already_imported_flag_is_workspace_scoped(client_factory, monkeyp
     """A lead imported by Workspace X must not mark the same business as
     already-in-CRM for Workspace Y — the shared cache is global, but the
     already_in_workspace annotation must not leak across workspaces."""
-    async def fake_discover(niche, city, country, country_code="PK", limit=50):
+    async def fake_discover(niche, city, country, country_code="PK", limit=50, enrich_candidates=False, source_counts=None):
         return [{"name": "Acme Dental", "phone": "+923001234567", "email": "info@acme.pk", "source": "google_maps", "social_links": {}, "lat": 24.8, "lon": 67.0}]
 
     monkeypatch.setattr(discovery_service, "discover_businesses", fake_discover)
@@ -84,7 +85,7 @@ async def test_already_imported_flag_is_workspace_scoped(client_factory, monkeyp
 
 
 async def test_already_imported_flag_applied_on_cache_hit_too(client_factory, monkeypatch):
-    async def fake_discover(niche, city, country, country_code="PK", limit=50):
+    async def fake_discover(niche, city, country, country_code="PK", limit=50, enrich_candidates=False, source_counts=None):
         return [{"name": "Acme Dental", "phone": "+923001234567", "email": "info@acme.pk", "source": "google_maps", "social_links": {}, "lat": 24.8, "lon": 67.0}]
 
     monkeypatch.setattr(discovery_service, "discover_businesses", fake_discover)

@@ -5,7 +5,7 @@ import respx
 from httpx import Response
 
 from app.core.config import settings
-from app.services import email_service
+from app.services.email import email_service
 
 
 async def test_send_email_posts_to_brevo(monkeypatch):

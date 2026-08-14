@@ -15,6 +15,8 @@ interface Props<T> {
   isLoading: boolean;
   emptyMessage?: string;
   renderActions?: (row: T) => React.ReactNode;
+  onRowClick?: (row: T) => void;
+  renderExpanded?: (row: T) => React.ReactNode;
 }
 
 /** Generic column-config-driven table. Reuses the same markup/classes as
@@ -27,7 +29,9 @@ export function AdminResourceTable<T>({
   getRowId,
   isLoading,
   emptyMessage = 'Nothing here yet.',
-  renderActions
+  renderActions,
+  onRowClick,
+  renderExpanded
 }: Props<T>) {
   const headers = renderActions ? [...columns, { key: '__actions', header: 'Actions', align: 'right' as const }] : columns;
 
@@ -67,20 +71,33 @@ export function AdminResourceTable<T>({
           )}
           {!isLoading &&
             rows.map((row) => (
-              <tr key={getRowId(row)} className="border-b border-ink-850 last:border-0">
-                {columns.map((col) => (
-                  <td
-                    key={col.key}
-                    className={cn(
-                      'px-5 py-4 text-[13.5px] text-chalk-dim',
-                      col.align === 'right' && 'text-right'
-                    )}
-                  >
-                    {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '—')}
-                  </td>
-                ))}
-                {renderActions && <td className="px-5 py-4 text-right">{renderActions(row)}</td>}
-              </tr>
+              <React.Fragment key={getRowId(row)}>
+                <tr
+                  className={cn(
+                    'border-b border-ink-850 last:border-0',
+                    onRowClick && 'cursor-pointer hover:bg-ink-850/60'
+                  )}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                >
+                  {columns.map((col) => (
+                    <td
+                      key={col.key}
+                      className={cn(
+                        'px-5 py-4 text-[13.5px] text-chalk-dim',
+                        col.align === 'right' && 'text-right'
+                      )}
+                    >
+                      {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '—')}
+                    </td>
+                  ))}
+                  {renderActions && <td className="px-5 py-4 text-right">{renderActions(row)}</td>}
+                </tr>
+                {renderExpanded && (
+                  <tr className="border-b border-ink-850 bg-ink-950/60 last:border-0">
+                    <td colSpan={headers.length}>{renderExpanded(row)}</td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
         </tbody>
       </table>

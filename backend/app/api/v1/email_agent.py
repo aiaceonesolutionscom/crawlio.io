@@ -14,7 +14,8 @@ from app.schemas.email_account import (
     EmailAgentMessageRequest,
     EmailDraftRead,
 )
-from app.services import email_ai_service
+from app.services.automation import email_ai_service
+from app.services.automation.email_conversation_service import resume_conversation, stop_conversation
 
 router = APIRouter(prefix="/email-agent", tags=["email-agent"])
 
@@ -120,7 +121,7 @@ async def stop_agent(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
-    success = await email_ai_service.agent_stop_conversation(session, conversation_id)
+    success = await stop_conversation(session, conversation_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return {"status": "stopped"}
@@ -132,7 +133,7 @@ async def resume_agent(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
-    success = await email_ai_service.agent_resume_conversation(session, conversation_id)
+    success = await resume_conversation(session, conversation_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return {"status": "resumed"}

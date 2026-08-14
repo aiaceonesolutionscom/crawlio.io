@@ -1,4 +1,4 @@
-from app.services import contact_extraction as ce
+from app.services.discovery import contact_extraction as ce
 
 
 def test_first_valid_email_rejects_asset_filenames():

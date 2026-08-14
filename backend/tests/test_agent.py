@@ -7,8 +7,10 @@ from app.db.models.agent import BusinessProfile, Meeting
 from app.db.models.email import EmailMessage
 from app.db.models.lead import Lead
 from app.db.models.workspace import Workspace
-from app.services import business_profile_service, meeting_service, outreach_service
-from app.services.email_ai_service import _is_unsubscribe_message
+from app.services.agent import business_profile_service
+from app.services.automation import meeting_service, outreach_service
+from app.services.automation.email_ai_service import _is_unsubscribe_message
+
 from app.workers.tasks_scoring import score_lead_task
 
 USER = "user_agent_test"

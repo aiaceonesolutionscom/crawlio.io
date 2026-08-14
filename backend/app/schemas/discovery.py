@@ -58,6 +58,9 @@ class DiscoverResponse(BaseModel):
     daily_limit: int
     remaining_today: int
     search_id: Optional[str] = None
+    # Raw per-source candidate counts before validation — diagnostics so the
+    # frontend can show why a search came up short (e.g. "Maps 0 · OSM 12").
+    source_counts: dict[str, int] = {}
 
 
 class DiscoveryStatusResponse(BaseModel):

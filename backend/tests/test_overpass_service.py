@@ -1,7 +1,7 @@
 import respx
 from httpx import Response
 
-from app.services import geocoding_service, overpass_service
+from app.services.discovery import geocoding_service, overpass_service
 
 _ELEMENT = {
     "tags": {
@@ -30,9 +30,13 @@ def test_parse_elements_extracts_structured_fields():
     assert item["source"] == "openstreetmap"
 
 
-def test_parse_elements_drops_non_latin_name_with_no_english_fallback():
+def test_parse_elements_keeps_non_latin_name_with_no_english_fallback():
+    # Local-script names (e.g. Urdu) are real businesses — kept as-is since the
+    # final lead_validator gate handles quality, not the OSM parse.
     element = {"tags": {"name": "کراچی ڈینٹل", "phone": "+92 21 111 222 333"}, "center": {"lat": 1, "lon": 2}}
-    assert overpass_service._parse_elements([element], "Karachi", "Dental Clinic") == []
+    results = overpass_service._parse_elements([element], "Karachi", "Dental Clinic")
+    assert len(results) == 1
+    assert results[0]["name"] == "کراچی ڈینٹل"
 
 
 def test_parse_elements_prefers_english_name_tag():

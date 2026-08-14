@@ -2,7 +2,9 @@ import { apiFetch } from '../client';
 
 export interface WhoamiDTO {
   email: string;
+  role: string;
   is_super_admin: boolean;
+  permissions: string[];
 }
 
 export function getWhoami(token: string | null) {

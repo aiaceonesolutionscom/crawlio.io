@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models.discovery_cache import DiscoveryCache
-from app.services import discovery_service
+from app.services.discovery import discovery_service
 from app.workers import tasks_discovery_prewarm
 
 
@@ -77,7 +77,7 @@ async def test_prewarm_writes_fresh_results_back_to_cache(db_engine, monkeypatch
 
     await tasks_discovery_prewarm._prewarm_async()
 
-    from app.services import discovery_cache_service
+    from app.services.discovery import discovery_cache_service
     async with session_maker() as session:
         result = await discovery_cache_service.get_cached(session, "dental", "karachi", "PK")
 
@@ -103,7 +103,7 @@ async def test_prewarm_survives_one_row_failing(db_engine, monkeypatch):
 
     await tasks_discovery_prewarm._prewarm_async()  # must not raise
 
-    from app.services import discovery_cache_service
+    from app.services.discovery import discovery_cache_service
     async with session_maker() as session:
         result = await discovery_cache_service.get_cached(session, "restaurant", "lahore", "PK")
     assert result is not None

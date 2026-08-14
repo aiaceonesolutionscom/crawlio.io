@@ -7,7 +7,7 @@ from app.core.deps import require_plan
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
 from app.schemas.team import InviteMemberCreate, TeamEntryRead, TeamListResponse
-from app.services import quota_service, team_service
+from app.services.workspace import quota_service, team_service
 
 router = APIRouter(prefix="/team", tags=["team"])
 

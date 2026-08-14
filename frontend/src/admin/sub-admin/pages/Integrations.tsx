@@ -1,0 +1,1 @@
+export { Integrations } from '../../super-admin/pages/Integrations';

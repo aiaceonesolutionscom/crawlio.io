@@ -3,7 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.admin_deps import require_super_admin
+from app.core.admin_deps import require_permission
+from app.core.permissions import PERMISSION_FEATURE_FLAGS_READ, PERMISSION_FEATURE_FLAGS_WRITE
 from app.db.models.feature_flag import FeatureFlag, FeatureFlagOverride
 from app.db.models.platform_admin import PlatformAdmin
 from app.db.session import get_session
@@ -14,7 +15,7 @@ from app.schemas.admin import (
     FeatureFlagRead,
     FeatureFlagUpdate,
 )
-from app.services import audit_service, feature_flag_service
+from app.services.admin import audit_service, feature_flag_service
 
 router = APIRouter(prefix="/feature-flags", tags=["admin:feature-flags"])
 
@@ -29,7 +30,7 @@ def _override_snapshot(override: FeatureFlagOverride) -> dict:
 
 @router.get("", response_model=list[FeatureFlagRead])
 async def list_feature_flags(
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_READ))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
     return await feature_flag_service.list_flags(session)
@@ -38,7 +39,7 @@ async def list_feature_flags(
 @router.post("", response_model=FeatureFlagRead, status_code=201)
 async def create_feature_flag(
     payload: FeatureFlagCreate,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):
@@ -61,7 +62,7 @@ async def create_feature_flag(
 async def update_feature_flag(
     flag_id: str,
     payload: FeatureFlagUpdate,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):
@@ -84,7 +85,7 @@ async def update_feature_flag(
 @router.delete("/{flag_id}", status_code=204)
 async def delete_feature_flag(
     flag_id: str,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):
@@ -105,7 +106,7 @@ async def delete_feature_flag(
 @router.get("/{flag_id}/overrides", response_model=list[FeatureFlagOverrideRead])
 async def list_feature_flag_overrides(
     flag_id: str,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_READ))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
     await feature_flag_service.get_flag_or_404(session, flag_id)
@@ -116,7 +117,7 @@ async def list_feature_flag_overrides(
 async def set_feature_flag_override(
     flag_id: str,
     payload: FeatureFlagOverrideSet,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):
@@ -144,7 +145,7 @@ async def set_feature_flag_override(
 async def clear_feature_flag_override(
     flag_id: str,
     workspace_id: str,
-    admin: Annotated[PlatformAdmin, Depends(require_super_admin)],
+    admin: Annotated[PlatformAdmin, Depends(require_permission(PERMISSION_FEATURE_FLAGS_WRITE))],
     session: Annotated[AsyncSession, Depends(get_session)],
     request: Request,
 ):

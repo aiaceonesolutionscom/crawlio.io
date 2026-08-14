@@ -21,8 +21,11 @@ from app.schemas.lead import (
     LeadWhatsAppResponse,
     lead_to_read,
 )
-from app.services import crm_service, enrichment_pipeline, lead_service
-from app.services.lead_service import DuplicateLeadError
+from app.services.crm import crm_service
+from app.services.enrichment import enrichment_pipeline
+from app.services.lead import lead_service
+from app.services.lead.lead_service import DuplicateLeadError
+
 from app.workers.tasks_enrichment import enrich_lead
 from app.workers.tasks_scoring import score_lead_task
 

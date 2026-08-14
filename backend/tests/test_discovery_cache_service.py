@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.services import discovery_cache_service
+from app.services.discovery import discovery_cache_service
 from app.db.models.discovery_cache import DiscoveryCache
 
 

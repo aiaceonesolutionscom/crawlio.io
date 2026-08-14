@@ -1,4 +1,4 @@
-from app.services import enrichment_pipeline
+from app.services.enrichment import enrichment_pipeline
 
 
 async def test_batch_free_tier_uses_plain_fetch_and_batches_fallback(monkeypatch):

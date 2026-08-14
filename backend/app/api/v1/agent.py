@@ -14,8 +14,9 @@ from app.db.models.agent import BusinessProfile, Meeting
 from app.db.models.lead import Lead
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
-from app.services import agent_realtime, business_profile_service, meeting_service, outreach_service
-from app.services import email_account_service
+from app.services.agent import agent_realtime, business_profile_service
+from app.services.automation import meeting_service, outreach_service
+from app.services.automation import email_account_service
 
 router = APIRouter(tags=["agent"])
 
@@ -359,6 +360,7 @@ async def get_activity(
         {
             "id": a.id,
             "conversation_id": a.conversation_id,
+            "whatsapp_conversation_id": a.whatsapp_conversation_id,
             "stage": a.stage,
             "status": a.status,
             "detail": a.detail,
@@ -390,7 +392,7 @@ async def edit_and_send_reply(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No customer email on this conversation")
 
     from app.db.models.email_account import EmailConversationMessage
-    from app.services import email_sync_service
+    from app.services.automation import email_sync_service
 
     account = await email_account_service.get_email_account(session, conv.email_account_id)
     if not account:

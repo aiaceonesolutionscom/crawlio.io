@@ -15,7 +15,7 @@ from app.schemas.email_account import (
     EmailMessagePageResponse,
     EmailQuotaRead,
 )
-from app.services import email_account_service, email_sync_service
+from app.services.automation import email_account_service, email_sync_service
 
 router = APIRouter(prefix="/email-accounts", tags=["email-accounts"])
 

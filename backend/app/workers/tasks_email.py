@@ -1,8 +1,8 @@
 import asyncio
 import logging
 
-from app.core.config import settings
-from app.services import email_service
+from app.core.integration_runtime import api_key
+from app.services.email import email_service
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ def send_welcome_email_task(to_email: str, name: str, workspace_name: str) -> No
 
 
 async def _send_welcome_email_async(to_email: str, name: str, workspace_name: str) -> None:
-    if not settings.brevo_api_key:
+    if not api_key("brevo_api_key"):
         logger.info("BREVO_API_KEY not configured; skipping welcome email to %s", to_email)
         return
     try:
@@ -30,7 +30,7 @@ def send_invite_email_task(to_email: str, workspace_name: str, role: str) -> Non
 
 
 async def _send_invite_email_async(to_email: str, workspace_name: str, role: str) -> None:
-    if not settings.brevo_api_key:
+    if not api_key("brevo_api_key"):
         logger.info("BREVO_API_KEY not configured; skipping invite email to %s", to_email)
         return
     try:

@@ -11,6 +11,7 @@ class PlatformAdminRead(BaseModel):
 
     id: str
     email: str
+    role: str
     clerk_user_id: Optional[str]
     added_by: Optional[str]
     is_active: bool
@@ -20,11 +21,32 @@ class PlatformAdminRead(BaseModel):
 
 class PlatformAdminCreate(BaseModel):
     email: str
+    role: str = "super_admin"
+
+
+class PlatformAdminRoleUpdate(BaseModel):
+    role: str
+
+
+class AdminPermissionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    admin_id: str
+    permission: str
+    granted_by: str
+    created_at: datetime
+
+
+class AdminPermissionCreate(BaseModel):
+    permission: str
 
 
 class WhoamiRead(BaseModel):
     email: str
+    role: str = "super_admin"
     is_super_admin: bool = True
+    permissions: list[str] = []
 
 
 class PlanConfigRead(BaseModel):
@@ -66,6 +88,9 @@ class AdminWorkspaceRead(BaseModel):
     seat_quota: int
     webhook_token: str
     created_at: datetime
+    member_count: int = 0
+    lead_count: int = 0
+    email_count: int = 0
 
 
 class AdminWorkspaceUpdate(BaseModel):
@@ -143,6 +168,25 @@ class SystemSettingUpsert(BaseModel):
     value: Any
     value_type: str = "string"
     description: Optional[str] = None
+
+
+class IntegrationRead(BaseModel):
+    key: str
+    label: str
+    description: str
+    env_name: str
+    configured: bool
+    source: str
+    masked_value: str
+
+
+class IntegrationOverrideUpsert(BaseModel):
+    value: str
+
+
+class IntegrationTestResult(BaseModel):
+    ok: bool
+    message: str
 
 
 class PlanCount(BaseModel):

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.deps import get_current_workspace
 from app.db.models.workspace import Workspace
-from app.services import geo_service
+from app.services.discovery import geo_service
 
 router = APIRouter(prefix="/geo", tags=["geo"])
 

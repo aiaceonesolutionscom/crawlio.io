@@ -352,10 +352,10 @@ async def list_meetings(
 
 @router.get("/agent/activity")
 async def get_activity(
-    workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
+    workspace: Annotated[Workspace, Depends(get_current_workspace)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
-    activities = await agent_realtime.list_recent_activity(session, workspace.id, limit=50)
+    activities = await agent_realtime.list_recent_activity(session, workspace.id, limit=100)
     return [
         {
             "id": a.id,

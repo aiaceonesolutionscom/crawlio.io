@@ -25,6 +25,12 @@ from app.db.models.whatsapp import (
     WhatsAppTemplate,
 )
 from app.db.models.workspace import Workspace, WorkspaceMember
+from app.db.models.whatsapp import (
+    WhatsAppAccount,
+    WhatsAppConversation,
+    WhatsAppConversationMessage,
+    WhatsAppTemplate,
+)
 
 __all__ = [
     "Workspace",

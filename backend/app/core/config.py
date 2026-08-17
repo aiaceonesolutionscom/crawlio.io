@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     google_maps_search_limit: int = 20
     # Optional proxy for the crawlers (anti-bot), e.g. "http://user:pass@host:port".
     proxy_url: str = ""
+    # Rotating residential proxy pool (anti-bot for Google Maps). Comma-separated
+    # proxy URLs — used only by sources that need residential IPs (Google Maps).
+    # Leave empty to run fully free on direct connections.
+    residential_proxy_list: list[str] = []
+    # Optional secondary proxy list for non-Maps HTTP crawlers (directories,
+    # Bing). Empty = direct connection.
+    http_proxy_list: list[str] = []
+    # Per-source proxy cooldown (seconds) after a block/429 before a proxy is
+    # tried again.
+    proxy_cooldown_seconds: int = 300
     directory_enabled: bool = True
     # Email validation (MX lookup) — on, but can be disabled for offline test runs.
     validate_emails: bool = True

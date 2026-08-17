@@ -16,10 +16,8 @@ import re
 from typing import Optional
 from urllib.parse import quote, urljoin, urlparse
 
-import httpx
-
 from app.core.config import settings
-from app.services.crawlers.base import CircuitBreaker, RateLimiter
+from app.services.crawlers.base import CircuitBreaker, ProxyRotator, RateLimiter, RobotsTxt, fetch_text
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +31,8 @@ HEADERS = {
 }
 _breaker = CircuitBreaker(name="directories", failure_threshold=3, cooldown_seconds=300.0)
 _limiter = RateLimiter(name="directories", interval=1.2)
+_robots = RobotsTxt()
+_proxy_rotator = ProxyRotator(settings.http_proxy_list, name="directory-proxy")
 
 _TEL_RE = re.compile(r'href=["\']tel:([^"\'?]+)', re.IGNORECASE)
 _MAILTO_RE = re.compile(r'href=["\']mailto:([^"\'?]+)', re.IGNORECASE)
@@ -63,21 +63,28 @@ def _is_external(href: str, page_host: str) -> bool:
 
 
 async def _fetch(url: str) -> Optional[str]:
-    """GET a directory page. Returns HTML or None; never raises."""
+    """GET a directory page with TLS impersonation. Returns HTML or None;
+    never raises."""
     if _breaker.open:
         return None
     await _limiter.wait()
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code >= 400:
-                logger.info("Directory page %s returned %d", url, resp.status_code)
-                return None
-            return resp.text
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Directory fetch failed for %s: %s", url, exc)
+    proxy = await _proxy_rotator.get(sticky_key=urlparse(url).netloc)
+    outcome = await fetch_text(
+        url,
+        headers=HEADERS,
+        timeout=TIMEOUT,
+        proxy=proxy,
+    )
+    if outcome.blocked:
+        logger.warning("Directory %s served a block/rate-limit wall (%d)", url, outcome.status)
         _breaker.record_failure()
+        _proxy_rotator.mark_failure(proxy)
         return None
+    if not outcome.ok:
+        logger.info("Directory page %s returned %d", url, outcome.status)
+        return None
+    _proxy_rotator.mark_success(proxy)
+    return outcome.text
 
 
 _BLOCK_OPEN_RE = re.compile(r"<(li|article|tr)\b[^>]*>", re.IGNORECASE)

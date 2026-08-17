@@ -29,7 +29,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from app.core.config import settings
-from app.services.crawlers.base import CircuitBreaker
+from app.services.crawlers.base import CircuitBreaker, ProxyRotator
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +46,67 @@ _PLACE_CONCURRENCY = 6
 # Chromium build name for error diagnostics.
 _CHROMIUM_HINT = "run `playwright install chromium`"
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
+# A pool of realistic desktop Chrome user agents, rotated per crawl session so
+# Google's fingerprint scoring sees a varied client identity rather than one
+# fixed UA hammering from many IPs.
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Edg/124.0",
+]
+# Locales that match a session's proxy country when the pool is geo-targeted;
+# keep en-PK as the conservative default so behavior stays predictable.
+_LOCALES = ["en-PK", "en-US", "en-GB"]
 
 # Google Maps blocks automation aggressively and a block tends to outlast a short
 # cooldown, so the cooldown is long and the failure threshold low.
 _breaker = CircuitBreaker(name="google-maps", failure_threshold=2, cooldown_seconds=600.0)
+# Residential proxy pool — Google Maps is the one source that needs real
+# residential IPs to stay unblocked at volume; empty pool = direct connection.
+_proxy_rotator = ProxyRotator(settings.residential_proxy_list, name="google-maps-proxy")
+
+
+# Signatures that mean "we are blocked", not "there are no results". Detected on
+# the page/URL before we conclude the feed is empty, so we rotate + cooldown
+# instead of mis-reporting a block as a zero-result search.
+_CAPTCHA_MARKERS = (
+    "unusual traffic",
+    "our systems have detected",
+    "recaptcha",
+    "g-recaptcha",
+    "captcha",
+    "enable javascript and cookies to continue",
+    "not a robot",
+    "/sorry/",
+)
+
+
+def _looks_blocked(page_url: str, html_sample: str) -> bool:
+    haystack = f"{page_url or ''} {html_sample or ''}".lower()
+    return any(marker in haystack for marker in _CAPTCHA_MARKERS)
+
+
+def _pick_user_agent() -> str:
+    return random.choice(USER_AGENTS)
+
+
+def _pick_locale() -> str:
+    return random.choice(_LOCALES)
+
+
+# Timezone that matches the session locale so the browser fingerprint is
+# internally consistent (Google scores mismatched locale/timezone signals).
+_TIMEZONES_BY_LOCALE = {
+    "en-PK": "Asia/Karachi",
+    "en-US": "America/New_York",
+    "en-GB": "Europe/London",
+}
+
+
+def _pick_timezone(locale: str) -> str:
+    return _TIMEZONES_BY_LOCALE.get(locale, "Asia/Karachi")
 
 
 def _query_url(niche: str, city: str, country: str) -> str:
@@ -322,11 +375,17 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
     url = _query_url(niche, city, country)
     records: list[dict] = []
 
+    # Pick a residential proxy for this crawl session (sticky across the whole
+    # crawl so Google doesn't see mid-session IP churn); None = direct.
+    proxy = await _proxy_rotator.get(sticky_key=f"maps:{niche}:{city}")
+    user_agent = _pick_user_agent()
+    locale = _pick_locale()
+
     try:
         async with async_playwright() as p:
             kwargs = {"headless": settings.google_maps_headless}
-            if settings.proxy_url:
-                kwargs["proxy"] = {"server": settings.proxy_url}
+            if proxy:
+                kwargs["proxy"] = {"server": proxy}
             try:
                 browser = await p.chromium.launch(**kwargs)
             except PlaywrightError as exc:
@@ -334,9 +393,10 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                 return []
             try:
                 context = await browser.new_context(
-                    user_agent=USER_AGENT,
-                    locale="en-PK",
+                    user_agent=user_agent,
+                    locale=locale,
                     viewport={"width": 1280, "height": 900},
+                    timezone_id=_pick_timezone(locale),
                 )
                 # Bandwidth optimization: block images/fonts/media/styles so the
                 # heavy Maps page loads much faster and consumes far less proxy
@@ -360,11 +420,38 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                         # result feed to actually render before deciding.
                         await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
                     except PlaywrightError as exc:
+                        # Distinguish a genuine block (captcha/unusual-traffic)
+                        # from a normal zero-result search so we rotate + back
+                        # off instead of silently reporting "no results".
+                        try:
+                            html_sample = await page.content()
+                        except PlaywrightError:
+                            html_sample = ""
+                        if _looks_blocked(page.url, html_sample):
+                            logger.warning(
+                                "Google Maps appears blocked for %s in %s (proxy=%s): %s",
+                                niche, city, proxy, exc,
+                            )
+                            _breaker.record_failure()
+                            _proxy_rotator.mark_failure(proxy)
+                            return []
                         logger.warning("Google Maps feed not found for %s in %s: %s", niche, city, exc)
                         return []
 
                     feed = await _collect_feed_links(page, limit)
                     if not feed:
+                        try:
+                            html_sample = await page.content()
+                        except PlaywrightError:
+                            html_sample = ""
+                        if _looks_blocked(page.url, html_sample):
+                            logger.warning(
+                                "Google Maps returned a block wall for %s in %s (proxy=%s)",
+                                niche, city, proxy,
+                            )
+                            _breaker.record_failure()
+                            _proxy_rotator.mark_failure(proxy)
+                            return []
                         logger.info("Google Maps found no results for %s in %s", niche, city)
                         return []
 
@@ -397,5 +484,6 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
         return []
 
     _breaker.record_success()
+    _proxy_rotator.mark_success(proxy)
     logger.info("Google Maps crawl for %s in %s returned %d records", niche, city, len(records))
     return records

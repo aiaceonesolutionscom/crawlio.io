@@ -41,9 +41,12 @@ class Settings(BaseSettings):
     # tried again.
     proxy_cooldown_seconds: int = 300
     directory_enabled: bool = True
-    # Bing Maps (worldwide) and BizData (OSM) crawlers — on by default; both are
-    # free and degrade to [] on failure/block so they can't break a search.
-    bing_maps_enabled: bool = True
+    # BizData (OSM) and Bing Maps (worldwide) crawlers — BizData is free and
+    # on by default; Bing Maps had its public search API retired (Aug 2025) and
+    # the Maps site is JS-walled, so it returns nothing useful without paid
+    # infrastructure — off by default, kept for when a working free surface
+    # returns.
+    bing_maps_enabled: bool = False
     bizdata_enabled: bool = True
     # Email validation (MX lookup) — on, but can be disabled for offline test runs.
     validate_emails: bool = True

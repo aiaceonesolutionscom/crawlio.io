@@ -218,6 +218,75 @@ async def _cybo(niche: str, city: str, country: str, limit: int) -> list[dict]:
     return records[:limit]
 
 
+def _country_code(country: str) -> str:
+    """Best-effort ISO country code for a directory domain; defaults to the
+    global .com surface when unknown."""
+    lower = (country or "").lower()
+    known = {
+        "pakistan": "pk", "united states": "us", "usa": "us", "america": "us",
+        "united kingdom": "uk", "britain": "uk", "england": "uk",
+        "australia": "au", "canada": "ca", "new zealand": "nz",
+        "united arab emirates": "ae", "uae": "ae", "saudi arabia": "sa",
+        "india": "in", "germany": "de", "france": "fr", "spain": "es",
+        "italy": "it", "netherlands": "nl", "singapore": "sg",
+    }
+    return known.get(lower, "")
+
+
+async def _hotfrog(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    # Hotfrog runs one domain per country (hotfrog.pk, hotfrog.co.uk, ...) plus
+    # a global www.hotfrog.com surface. Use the country domain when we know it.
+    base = "https://www.hotfrog.com"
+    cc = _country_code(country)
+    if cc:
+        cc_base = {"pk": "https://www.hotfrog.pk", "uk": "https://www.hotfrog.co.uk",
+                   "ca": "https://www.hotfrog.ca", "au": "https://www.hotfrog.com.au",
+                   "nz": "https://www.hotfrog.co.nz", "us": "https://www.hotfrog.com"}.get(cc)
+        if cc_base:
+            base = cc_base
+    url = f"{base}/search?kw={quote(niche)}&location={quote(city)}"
+    html = await _fetch(url)
+    records = _parse_listings(html or "", url)
+    if len(records) < limit:
+        # Alternate URL shape: /city/category.html
+        alt = f"{base}/{quote(_slug(city))}/{quote(_slug(niche))}.html"
+        alt_html = await _fetch(alt)
+        if alt_html:
+            alt_records = _parse_listings(alt_html, alt)
+            seen = {r["phone"] for r in records}
+            for r in alt_records:
+                if r["phone"] not in seen:
+                    seen.add(r["phone"])
+                    records.append(r)
+    return records[:limit]
+
+
+async def _yellowpages_com(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    # YellowPages.com (US/international) — biggest English directory worldwide.
+    base = "https://www.yellowpages.com"
+    url = f"{base}/search?search_terms={quote(niche)}&geo_location_terms={quote(f'{city}, {country}')}"
+    html = await _fetch(url)
+    return _parse_listings(html or "", url)[:limit]
+
+
+async def _scoot(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    # Scoot — UK directory with strong SMB coverage.
+    base = "https://www.scoot.co.uk"
+    url = f"{base}/search/{quote(_slug(niche))}/{quote(_slug(city))}"
+    html = await _fetch(url)
+    return _parse_listings(html or "", url)[:limit]
+
+
+async def _yandex(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    # Yandex Maps — Russia/CIS + wide global coverage, HTML surface scrapable.
+    base = "https://yandex.com/maps/2/search"
+    # Yandex needs text query + ll (lat/lon); without coords it still accepts
+    # free text and searches from a default viewport. Best-effort.
+    url = f"{base}/?text={quote(f'{niche} {city} {country}')}"
+    html = await _fetch(url)
+    return _parse_listings(html or "", url)[:limit]
+
+
 async def search_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
     """Query every enabled directory and merge unique records. Never raises —
     returns whatever the sources that responded produced."""
@@ -225,7 +294,9 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
         return []
     limit = max(1, min(limit, 100))
 
-    sources = [_yellowpages_pk, _cybo]
+    sources = [
+        _yellowpages_pk, _cybo, _hotfrog, _yellowpages_com, _scoot, _yandex,
+    ]
     records: list[dict] = []
     by_phone: dict[str, dict] = {}
 

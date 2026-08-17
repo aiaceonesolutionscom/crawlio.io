@@ -31,12 +31,15 @@ from typing import Optional
 from app.core.config import settings
 from app.services import geo_service, overpass_service
 from app.services.crawlers import (
+    bing_maps_crawler,
+    bizdata_crawler,
     certtransparency_crawler,
     dns_crawler,
     directory_scraper,
     lead_merger,
     lead_validator,
     maps_crawler,
+    niche_synonyms,
     wikidata_crawler,
     wikipedia_crawler,
     web_search_service,
@@ -46,7 +49,10 @@ from app.services.lead_quality import data_quality
 
 logger = logging.getLogger(__name__)
 
-_NEARBY_CITY_FALLBACKS = 2
+_NEARBY_CITY_FALLBACKS = 3
+# How many country-wide top cities to try when the requested city + its nearby
+# neighbors are all thin (thin-market exact-count ladder).
+_COUNTRY_TOP_CITIES_FALLBACKS = 2
 
 # How many extra raw candidates to request per source before validation/dedup,
 # so the pipeline has enough raw material to deliver the requested final count
@@ -126,8 +132,10 @@ async def _scrape_city_sources(
     tasks = [
         _timed_source("osm", overpass_service.discover_businesses(niche, city, country, fetch_limit)),
         _timed_source("directory", directory_scraper.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("bing", bing_maps_crawler.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("bizdata", bizdata_crawler.search_businesses(niche, city, country, fetch_limit)),
     ]
-    names = ["osm", "directory"]
+    names = ["osm", "directory", "bing", "bizdata"]
 
     if use_maps:
         tasks.insert(0, _timed_source("maps", maps_crawler.search_businesses(niche, city, country, fetch_limit)))
@@ -147,7 +155,7 @@ async def _scrape_city_sources(
     outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
     source_counts: dict[str, int] = {
-        "maps": 0, "osm": 0, "directory": 0,
+        "maps": 0, "osm": 0, "directory": 0, "bing": 0, "bizdata": 0,
         "wikidata": 0, "wikipedia": 0, "certtransparency": 0, "dns": 0,
     }
     candidates: list[dict] = []
@@ -240,6 +248,34 @@ async def discover_businesses(
                 niche, city, len(overpass_extra), len(cleaned),
             )
 
+    # --- Fill ladder: synonym expansion within the primary city --------------
+    # Same city, but every source queried with each synonym the niche expands
+    # to. Directories/aggregators index different phrases; a "dental clinic"
+    # query surfaces listings "dentist" misses, and vice versa. Real structured
+    # data, same city, still cheaper than a nearby city (no new geography).
+    if len(cleaned) < limit:
+        synonyms = [s for s in niche_synonyms.expand_synonyms(niche) if s.lower() != niche.strip().lower()]
+        for synonym in synonyms[:3]:
+            if len(cleaned) >= limit:
+                break
+            remaining = limit - len(cleaned)
+            syn_candidates, syn_counts, syn_engaged = await _scrape_city_sources(
+                synonym, city, country, remaining, use_maps=False
+            )
+            if not syn_engaged:
+                continue
+            for item in syn_candidates:
+                item["result_city"] = city
+                item["is_fallback_city"] = True
+                item["original_niche"] = niche
+            candidates.extend(syn_candidates)
+            merged = lead_merger.merge_businesses(candidates)
+            cleaned = _validate_all(merged, niche, country_code, limit)
+            logger.info(
+                "Synonym top-up %r for %s in %s: +%d raw -> %d validated total",
+                synonym, niche, city, len(syn_candidates), len(cleaned),
+            )
+
     # Nearby-city fallback: only engages when the *primary* city's sources are
     # healthy but genuinely thin on results (e.g. Islamabad vs. Karachi) — real
     # structured data from a real nearby city, not a stub, tried before Tavily.
@@ -262,6 +298,32 @@ async def discover_businesses(
             logger.info(
                 "Nearby-city fallback %s for %s (requested %s): maps=%d osm=%d directory=%d -> %d total",
                 nearby["name"], niche, city, nb_counts["maps"], nb_counts["osm"], nb_counts["directory"], len(cleaned),
+            )
+
+    # Country-wide fallback: when even nearby cities are thin (rare micro-city
+    # searches in a country with few businesses of the niche), try the country's
+    # top cities — real businesses a user is still happy to see, with
+    # result_city + is_fallback_city tagged honestly.
+    if len(cleaned) < limit:
+        top_cities = geo_service.top_cities(country_code, n=_COUNTRY_TOP_CITIES_FALLBACKS)
+        for top in top_cities:
+            if len(cleaned) >= limit or (top.get("name") or "").lower() == (city or "").lower():
+                continue
+            remaining = limit - len(cleaned)
+            tc_candidates, tc_counts, tc_engaged = await _scrape_city_sources(
+                niche, top["name"], country, remaining, use_maps=False
+            )
+            if not tc_engaged:
+                continue
+            for item in tc_candidates:
+                item["result_city"] = top["name"]
+                item["is_fallback_city"] = True
+            candidates.extend(tc_candidates)
+            merged = lead_merger.merge_businesses(candidates)
+            cleaned = _validate_all(merged, niche, country_code, limit)
+            logger.info(
+                "Country-wide fallback %s for %s (requested %s): +%d raw -> %d validated total",
+                top["name"], niche, city, len(tc_candidates), len(cleaned),
             )
 
     # Last-resort, opt-in top-up when everything above still came up short —

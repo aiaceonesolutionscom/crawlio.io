@@ -83,3 +83,13 @@ def nearby_cities(country_code: str, city_name: str, n: int = 2) -> list[dict]:
     ]
     candidates.sort(key=lambda c: _haversine_km(origin["lat"], origin["lon"], c["lat"], c["lon"]))
     return candidates[:n]
+
+
+def top_cities(country_code: str, n: int = 2) -> list[dict]:
+    """The country's first (largest) cities from the static CITIES list, used
+    as a last-resort country-wide discovery fallback when the requested city
+    and its neighbors are all thin. Pure offline — no geocoding call."""
+    city_list = CITIES.get(country_code.upper(), [])
+    if not city_list:
+        return []
+    return city_list[:n]

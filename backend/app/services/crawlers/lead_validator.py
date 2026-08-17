@@ -64,8 +64,17 @@ def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
             return "+92" + digits[-10:]
         # Not obviously Pakistani — reject rather than guess wrong.
         return None
-    # Generic: a bare 10-11 digit national number from a known dial code family
-    # is kept as a plain integer string so non-PK searches still show phones.
+    # Other countries: normalize using the worldwide calling-code map so a US/
+    # UK/Gulf/Indian number comes back in canonical E.164 (+1...+44...+971...
+    # +91...) instead of a bare digit string. This is what feeds the worldwide
+    # WhatsApp deep-link builder.
+    from app.services.crawlers.whatsapp_links import normalize_e164
+
+    e164 = normalize_e164(candidate, cc)
+    if e164:
+        return e164
+    # Unknown/edge-country code (or a number we can't map confidently) — keep a
+    # plain national number so non-PK searches still show phones.
     if 9 <= len(digits) <= 12:
         return digits
     return None

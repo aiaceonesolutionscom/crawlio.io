@@ -28,7 +28,9 @@ class TestNormalizePhone:
         assert normalize_phone("123") is None
 
     def test_generic_country_keeps_long_national(self):
-        assert normalize_phone("212-555-0134", "US") == "2125550134"
+        # Worldwide normalization: a US national number becomes canonical E.164
+        # (+1...) so the WhatsApp deep-link builder can use it directly.
+        assert normalize_phone("212-555-0134", "US") == "+12125550134"
 
     def test_pk_garbage_rejected(self):
         assert normalize_phone("not a phone", "PK") is None

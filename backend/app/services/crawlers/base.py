@@ -1,5 +1,5 @@
-"""Shared infrastructure for the crawlers: a circuit breaker and a token-bucket
-rate limiter.
+"""Shared infrastructure for the crawlers: a circuit breaker, a token-bucket
+rate limiter, a proxy rotator, and a per-source reliability tracker.
 
 Every free source (Google Maps, directory sites, Overpass) can block or
 rate-limit us. Rather than every crawler re-implementing its own backoff, they
@@ -289,3 +289,81 @@ class RobotsTxt:
 
     def clear(self) -> None:
         self._cache.clear()
+
+
+class SourceTracker:
+    """Rolling reliability stats per crawler source.
+
+    Crawlers report `record_success(source)` / `record_failure(source)`; this
+    keeps a bounded rolling window of outcomes (newest-first) so the health and
+    dashboard endpoints can show which sources are healthy and which are getting
+    blocked or erroring right now — without unbounded memory growth.
+
+    Thread-safety isn't needed: all crawler calls run inside one asyncio loop.
+    """
+
+    def __init__(self, window_size: int = 100):
+        self.window_size = window_size
+        self._outcomes: dict[str, list[bool]] = {}
+        self._total: dict[str, int] = {}
+        self._successes: dict[str, int] = {}
+        self._first_seen: dict[str, float] = {}
+
+    def record(self, source: str, ok: bool) -> None:
+        source = source or "unknown"
+        if source not in self._outcomes:
+            self._outcomes[source] = []
+            self._total[source] = 0
+            self._successes[source] = 0
+            self._first_seen[source] = time.monotonic()
+        window = self._outcomes[source]
+        window.append(ok)
+        if len(window) > self.window_size:
+            removed = window.pop(0)
+            self._total[source] -= 1
+            if removed:
+                self._successes[source] -= 1
+        self._total[source] += 1
+        if ok:
+            self._successes[source] += 1
+
+    def record_success(self, source: str) -> None:
+        self.record(source, True)
+
+    def record_failure(self, source: str) -> None:
+        self.record(source, False)
+
+    def stats(self, source: str) -> dict:
+        """Return {total, successes, failures, success_rate, last_ok} for a
+        source, or a zeroed dict when the source hasn't been seen yet."""
+        source = source or "unknown"
+        total = self._total.get(source, 0)
+        successes = self._successes.get(source, 0)
+        window = self._outcomes.get(source, [])
+        return {
+            "total": total,
+            "successes": successes,
+            "failures": total - successes,
+            "success_rate": round(successes / total, 3) if total else 1.0,
+            "last_ok": bool(window and window[-1]),
+            "window_size": len(window),
+        }
+
+    def all_stats(self) -> dict[str, dict]:
+        return {source: self.stats(source) for source in sorted(self._outcomes)}
+
+    def unhealthy(self, min_rate: float = 0.3, min_samples: int = 5) -> list[str]:
+        """Sources whose recent success rate is below `min_rate` over at least
+        `min_samples` observed calls — candidates for the degraded flag."""
+        out: list[str] = []
+        for source, window in self._outcomes.items():
+            if len(window) < min_samples:
+                continue
+            rate = sum(window) / len(window)
+            if rate < min_rate:
+                out.append(source)
+        return out
+
+
+# Shared instance the crawlers and health endpoints use.
+source_tracker = SourceTracker()

@@ -44,6 +44,7 @@ from app.services.crawlers import (
     wikipedia_crawler,
     web_search_service,
 )
+from app.services.crawlers.base import source_tracker
 from app.services.contact_extraction import clean_business_name, is_own_website
 from app.services.lead_quality import data_quality
 
@@ -175,14 +176,19 @@ async def _scrape_city_sources(
 
 async def _timed_source(name: str, coro):
     """Run a discovered-source coroutine with a timeout guard so one slow
-    source can't stall the whole request."""
+    source can't stall the whole request. Records the outcome on the shared
+    source_tracker so the health/dashboard endpoints see per-source health."""
     try:
-        return await asyncio.wait_for(coro, timeout=_SOURCE_TIMEOUT)
+        result = await asyncio.wait_for(coro, timeout=_SOURCE_TIMEOUT)
+        source_tracker.record_success(name)
+        return result
     except asyncio.TimeoutError:
         logger.warning("Discovery source %s timed out after %.1fs", name, _SOURCE_TIMEOUT)
+        source_tracker.record_failure(name)
         return []
     except Exception as exc:
         logger.warning("Discovery source %s raised: %s", name, exc)
+        source_tracker.record_failure(name)
         return []
 
 

@@ -17,7 +17,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from app.core.config import settings
-from app.services.crawlers.base import CircuitBreaker, RateLimiter, fetch_text
+from app.services.crawlers.base import CircuitBreaker, RateLimiter, fetch_text, source_tracker, source_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +141,7 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
     if outcome.blocked:
         logger.warning("Bing Maps returned a block/rate-limit wall for %s in %s", niche, city)
         _breaker.record_failure()
+        source_tracker.record_failure("bing_maps")
         return []
     if not outcome.ok:
         logger.info("Bing Maps returned %d for %s in %s", outcome.status, niche, city)
@@ -159,5 +160,6 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
         record.setdefault("industry", niche.strip().title())
 
     _breaker.record_success()
+    source_tracker.record_success("bing_maps")
     logger.info("Bing Maps crawl for %s in %s returned %d records", niche, city, len(records))
     return records[:limit]

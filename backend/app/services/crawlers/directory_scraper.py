@@ -17,7 +17,7 @@ from typing import Optional
 from urllib.parse import quote, urljoin, urlparse
 
 from app.core.config import settings
-from app.services.crawlers.base import CircuitBreaker, ProxyRotator, RateLimiter, RobotsTxt, fetch_text
+from app.services.crawlers.base import CircuitBreaker, ProxyRotator, RateLimiter, RobotsTxt, fetch_text, source_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ async def _fetch(url: str) -> Optional[str]:
     if outcome.blocked:
         logger.warning("Directory %s served a block/rate-limit wall (%d)", url, outcome.status)
         _breaker.record_failure()
+        source_tracker.record_failure("directory")
         _proxy_rotator.mark_failure(proxy)
         return None
     if not outcome.ok:
@@ -331,4 +332,5 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
             break
 
     _breaker.record_success()
+    source_tracker.record_success("directory")
     return records

@@ -15,7 +15,7 @@ import re
 from typing import Optional
 
 from app.core.config import settings
-from app.services.crawlers.base import CircuitBreaker, fetch_text
+from app.services.crawlers.base import CircuitBreaker, fetch_text, source_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +120,12 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
         except Exception as exc:
             logger.warning("BizData fetch failed for %s in %s: %s", niche, city, exc)
             _breaker.record_failure()
+            source_tracker.record_failure("bizdata")
             continue
         if outcome.blocked:
             logger.warning("BizData returned a block/rate-limit wall for %s in %s", niche, city)
             _breaker.record_failure()
+            source_tracker.record_failure("bizdata")
             continue
         if not outcome.ok:
             logger.info("BizData returned %d for %s in %s", outcome.status, niche, city)
@@ -135,6 +137,7 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
         except (ValueError, TypeError) as exc:
             logger.warning("BizData returned non-JSON for %s in %s: %s", niche, city, exc)
             _breaker.record_failure()
+            source_tracker.record_failure("bizdata")
             continue
         for record in _parse_businesses(payload):
             key = (record.get("name") or "").lower() + "|" + re.sub(r"\D", "", record.get("phone") or "")
@@ -143,6 +146,7 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
             seen.add(key)
             records.append(record)
         _breaker.record_success()
+    source_tracker.record_success("bizdata")
 
     # Tag with the niche so downstream validation/merging has consistent context.
     for record in records:

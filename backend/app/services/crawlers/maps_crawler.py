@@ -29,7 +29,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from app.core.config import settings
-from app.services.crawlers.base import CircuitBreaker, ProxyRotator
+from app.services.crawlers.base import CircuitBreaker, ProxyRotator, source_tracker, source_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +433,7 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                                 niche, city, proxy, exc,
                             )
                             _breaker.record_failure()
+                            source_tracker.record_failure("google_maps")
                             _proxy_rotator.mark_failure(proxy)
                             return []
                         logger.warning("Google Maps feed not found for %s in %s: %s", niche, city, exc)
@@ -450,6 +451,7 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                                 niche, city, proxy,
                             )
                             _breaker.record_failure()
+                            source_tracker.record_failure("google_maps")
                             _proxy_rotator.mark_failure(proxy)
                             return []
                         logger.info("Google Maps found no results for %s in %s", niche, city)
@@ -477,13 +479,16 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
     except PlaywrightError as exc:
         logger.warning("Google Maps crawler failed for %s in %s: %s", niche, city, exc)
         _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
         return []
     except Exception as exc:
         logger.warning("Google Maps crawler failed unexpectedly for %s in %s: %s", niche, city, exc)
         _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
         return []
 
     _breaker.record_success()
+    source_tracker.record_success("google_maps")
     _proxy_rotator.mark_success(proxy)
     logger.info("Google Maps crawl for %s in %s returned %d records", niche, city, len(records))
     return records

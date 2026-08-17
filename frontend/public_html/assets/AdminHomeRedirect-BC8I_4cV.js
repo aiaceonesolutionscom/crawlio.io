@@ -1,0 +1,1 @@
+import{u as t,j as e,N as r}from"./index-DDmUh3bQ.js";function s(){const{admin:i,isLoaded:n}=t();return n?i?i.role==="super_admin"?e.jsx(r,{to:"/admin/super-admin",replace:!0}):e.jsx(r,{to:"/admin/sub-admin",replace:!0}):e.jsx(r,{to:"/app",replace:!0}):null}export{s as AdminHomeRedirect};

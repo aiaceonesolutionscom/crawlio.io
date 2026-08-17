@@ -1,0 +1,1 @@
+import{r as e}from"./index-DDmUh3bQ.js";function f(r){const[n,u]=e.useState([]),[c,a]=e.useState(!0),[l,o]=e.useState(null),s=e.useCallback(async()=>{a(!0),o(null);try{const t=await r();u(t)}catch(t){o(t instanceof Error?t.message:"Failed to load")}finally{a(!1)}},[r]);return e.useEffect(()=>{s()},[s]),{items:n,isLoading:c,error:l,refresh:s}}export{f as u};

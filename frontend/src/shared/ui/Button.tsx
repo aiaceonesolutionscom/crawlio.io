@@ -6,10 +6,10 @@ type Variant = 'primary' | 'secondary' | 'outline' | 'ghost';
 type Size = 'sm' | 'md' | 'lg';
 
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-signal text-signal-deep hover:bg-signal-dark',
-  secondary: 'bg-ink-800 text-chalk hover:bg-ink-700 border border-ink-700',
-  outline: 'border border-ink-600 text-chalk hover:border-signal hover:text-signal bg-transparent',
-  ghost: 'text-chalk-dim hover:text-chalk hover:bg-ink-850'
+  primary: 'btn-primary',
+  secondary: 'btn-secondary',
+  outline: 'btn-outline',
+  ghost: 'btn-ghost',
 };
 
 const SIZES: Record<Size, string> = {
@@ -18,8 +18,7 @@ const SIZES: Record<Size, string> = {
   lg: 'h-[52px] px-7 text-[15px]'
 };
 
-const BASE =
-'inline-flex items-center justify-center gap-2 rounded-lg font-medium tracking-tight transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap';
+const BASE = 'inline-flex items-center justify-center gap-2 rounded-lg font-medium tracking-tight transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap';
 
 interface BaseProps {
   variant?: Variant;
@@ -39,7 +38,6 @@ export function Button({
     <button className={cn(BASE, VARIANTS[variant], SIZES[size], className)} {...rest}>
       {children}
     </button>);
-
 }
 
 export function ButtonLink({
@@ -54,5 +52,4 @@ export function ButtonLink({
     <Link to={to} className={cn(BASE, VARIANTS[variant], SIZES[size], className)} {...rest}>
       {children}
     </Link>);
-
 }

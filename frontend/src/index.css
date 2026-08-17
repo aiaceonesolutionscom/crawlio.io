@@ -19,6 +19,7 @@ body {
   color: #f1f4f0;
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 ::selection {
   background-color: #cbff4d;
@@ -40,4 +41,122 @@ body {
 .scrollbar-slim::-webkit-scrollbar-thumb {
   background-color: #242a2c;
   border-radius: 999px;
+}
+
+/* Professional UI Enhancements */
+@layer utilities {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.2s ease-out;
+  }
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+  .animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Mobile-first responsive container */
+.container-responsive {
+  width: 100%;
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+@media (min-width: 640px) {
+  .container-responsive { padding-left: 1.5rem; padding-right: 1.5rem; }
+}
+@media (min-width: 1024px) {
+  .container-responsive { padding-left: 2rem; padding-right: 2rem; }
+}
+
+/* Improved card shadows */
+.shadow-elevated {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.shadow-soft {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Better focus states for accessibility */
+.focus-ring {
+  @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-signal focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950;
+}
+
+/* Smooth transitions */
+.transition-smooth {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Mobile sidebar improvements */
+.mobile-sidebar-enter {
+  animation: slideInLeft 0.25s ease-out;
+}
+.mobile-sidebar-exit {
+  animation: slideOutLeft 0.2s ease-in;
+}
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideOutLeft {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(-100%); opacity: 0; }
+}
+
+/* Table responsive */
+.table-responsive {
+  @apply overflow-x-auto scrollbar-slim;
+}
+
+/* Form input improvements */
+.input-base {
+  @apply w-full rounded-lg border border-ink-700 bg-ink-950 px-4 py-3 text-[14px] text-chalk placeholder:text-chalk-faint 
+         focus:border-signal focus:outline-none focus:ring-1 focus:ring-signal
+         disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-ink-900
+         transition-smooth touch-target;
+}
+
+/* Button improvements */
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg bg-signal px-5 py-2.5 text-sm font-medium text-signal-deep 
+         hover:bg-signal-dark focus-ring disabled:opacity-50 disabled:pointer-events-none
+         transition-smooth touch-target whitespace-nowrap;
+}
+.btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg border border-ink-700 bg-ink-800 px-5 py-2.5 text-sm font-medium text-chalk 
+         hover:bg-ink-700 focus-ring disabled:opacity-50 disabled:pointer-events-none
+         transition-smooth touch-target whitespace-nowrap;
+}
+.btn-outline {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg border border-ink-600 bg-transparent px-5 py-2.5 text-sm font-medium text-chalk 
+         hover:border-signal hover:text-signal focus-ring disabled:opacity-50 disabled:pointer-events-none
+         transition-smooth touch-target whitespace-nowrap;
+}
+.btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-chalk-dim 
+         hover:text-chalk hover:bg-ink-850 focus-ring disabled:opacity-50 disabled:pointer-events-none
+         transition-smooth touch-target whitespace-nowrap;
 }

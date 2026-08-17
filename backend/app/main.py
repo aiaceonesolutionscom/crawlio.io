@@ -41,8 +41,14 @@ app = FastAPI(title="Crawlio API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_origin_regex=".*",
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "https://triconrepublic.com",
+        "http://triconrepublic.com",
+    ],
+    allow_origin_regex=r"https?://.*\.?triconrepublic\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

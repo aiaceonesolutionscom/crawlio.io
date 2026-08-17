@@ -48,6 +48,19 @@ logger = logging.getLogger(__name__)
 
 _NEARBY_CITY_FALLBACKS = 2
 
+# How many extra raw candidates to request per source before validation/dedup,
+# so the pipeline has enough raw material to deliver the requested final count
+# after the quality gate (MX-verified email, +92 phone, real website) trims
+# the fat. Validation attrition on Pakistani local-business data is ~60-70%,
+# so a 3x oversample reliably delivers the requested final count from a single
+# primary-city scrape.
+OVERSAMPLE_FACTOR = 3
+# Per-source fetch cap to avoid runaway scraping on the wider-radius passes.
+PER_SOURCE_FETCH_CAP = 150
+# Timeout per individual source so one slow/straggler source doesn't stall
+# the whole request (e.g. a Google Maps hiccup blocking for 30s+).
+_SOURCE_TIMEOUT = 25.0
+
 
 class DiscoveryUnavailableError(Exception):
     pass
@@ -92,6 +105,9 @@ async def _scrape_city_sources(
     per_source_counts, engaged) — engaged is True when at least one source
     actually returned something (vs. failing/empty).
 
+    Every source is capped at `min(limit, PER_SOURCE_FETCH_CAP)` and guarded
+    by a per-source timeout so a single slow crawler can't stall the request.
+
     Order of attempts (first to last):
       1. Google Maps (primary, if use_maps=True) — richest data, slowest.
       2. OSM/Overpass (structured POIs, free).
@@ -105,24 +121,26 @@ async def _scrape_city_sources(
     trades that richness for speed: OSM + directories alone finish in a few
     seconds, so trying 1-2 nearby cities stays fast instead of multiplying
     the wait by however many cities get tried."""
+    fetch_limit = min(max(limit, 1) * OVERSAMPLE_FACTOR, PER_SOURCE_FETCH_CAP)
+
     tasks = [
-        overpass_service.discover_businesses(niche, city, country, limit),
-        directory_scraper.search_businesses(niche, city, country, limit),
+        _timed_source("osm", overpass_service.discover_businesses(niche, city, country, fetch_limit)),
+        _timed_source("directory", directory_scraper.search_businesses(niche, city, country, fetch_limit)),
     ]
     names = ["osm", "directory"]
 
     if use_maps:
-        tasks.insert(0, maps_crawler.search_businesses(niche, city, country, limit))
+        tasks.insert(0, _timed_source("maps", maps_crawler.search_businesses(niche, city, country, fetch_limit)))
         names.insert(0, "maps")
 
     # New providers: Wikidata, Wikipedia, CertTransparency, DNS.
     # These are added after the core three; they are lighter weight and
     # serve as supplementary sources when the primary ones are thin.
     tasks.extend([
-        wikidata_crawler.search_businesses(niche, city, country, limit),
-        wikipedia_crawler.search_businesses(niche, city, country, limit),
-        certtransparency_crawler.search_businesses(niche, city, country, limit),
-        dns_crawler.search_businesses(niche, city, country, limit),
+        _timed_source("wikidata", wikidata_crawler.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("wikipedia", wikipedia_crawler.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("certtransparency", certtransparency_crawler.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("dns", dns_crawler.search_businesses(niche, city, country, fetch_limit)),
     ])
     names.extend(["wikidata", "wikipedia", "certtransparency", "dns"])
 
@@ -145,6 +163,19 @@ async def _scrape_city_sources(
         candidates.extend(outcome)
 
     return candidates, source_counts, engaged
+
+
+async def _timed_source(name: str, coro):
+    """Run a discovered-source coroutine with a timeout guard so one slow
+    source can't stall the whole request."""
+    try:
+        return await asyncio.wait_for(coro, timeout=_SOURCE_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Discovery source %s timed out after %.1fs", name, _SOURCE_TIMEOUT)
+        return []
+    except Exception as exc:
+        logger.warning("Discovery source %s raised: %s", name, exc)
+        return []
 
 
 async def discover_businesses(
@@ -179,6 +210,35 @@ async def discover_businesses(
         niche, city, source_counts["maps"], source_counts["osm"], source_counts["directory"],
         len(merged), len(cleaned),
     )
+
+    # If oversampled sources still didn't yield enough valid leads, retry
+    # Overpass (the fast, free source) within the same city but with an
+    # escalated search radius before falling back to nearby cities. This
+    # catches businesses just outside the default Overpass bbox but still
+    # legitimately in the requested city, and it's cheap (no Playwright).
+    if len(cleaned) < limit:
+        remaining = limit - len(cleaned)
+        extra_budget = min(remaining * OVERSAMPLE_FACTOR, PER_SOURCE_FETCH_CAP)
+        try:
+            overpass_extra = await asyncio.wait_for(
+                overpass_service.discover_businesses(niche, city, country, extra_budget, wider_radius=True),
+                timeout=_SOURCE_TIMEOUT,
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.info("Overpass wider-radius retry for %s in %s skipped: %s", niche, city, exc)
+            overpass_extra = []
+
+        if overpass_extra:
+            for item in overpass_extra:
+                item.setdefault("result_city", city)
+                item.setdefault("is_fallback_city", False)
+            candidates.extend(overpass_extra)
+            merged = lead_merger.merge_businesses(candidates)
+            cleaned = _validate_all(merged, niche, country_code, limit)
+            logger.info(
+                "Overpass wider-radius top-up for %s in %s: +%d raw -> %d validated total",
+                niche, city, len(overpass_extra), len(cleaned),
+            )
 
     # Nearby-city fallback: only engages when the *primary* city's sources are
     # healthy but genuinely thin on results (e.g. Islamabad vs. Karachi) — real

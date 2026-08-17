@@ -13,8 +13,8 @@ PLAN_CAPABILITIES: dict[str, set[str]] = {
 # Lead Discovery result cap per search, by plan.
 DISCOVERY_LIMITS: dict[str, int] = {
     "free": 50,
-    "pro": 100,
-    "enterprise": 200,
+    "pro": 200,
+    "enterprise": 500,
 }
 
 # Max leads that can be *added* (imported) via Lead Discovery per rolling calendar
@@ -22,8 +22,8 @@ DISCOVERY_LIMITS: dict[str, int] = {
 # workspace's overall lead_quota.
 DAILY_DISCOVERY_IMPORT_LIMITS: dict[str, int] = {
     "free": 50,
-    "pro": 100,
-    "enterprise": 200,
+    "pro": 200,
+    "enterprise": 500,
 }
 
 PLAN_LIMITS: dict[str, dict[str, int]] = {

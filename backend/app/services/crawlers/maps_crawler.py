@@ -338,6 +338,20 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                     locale="en-PK",
                     viewport={"width": 1280, "height": 900},
                 )
+                # Bandwidth optimization: block images/fonts/media/styles so the
+                # heavy Maps page loads much faster and consumes far less proxy
+                # bandwidth — we only need the DOM text, never the pixels.
+                try:
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
+                            else route.continue_()
+                        ),
+                    )
+                except (PlaywrightError, AttributeError):
+                    pass
                 try:
                     page = await context.new_page()
                     try:

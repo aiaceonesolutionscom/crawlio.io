@@ -99,6 +99,19 @@ async def extract_contact_details(
             browser = await p.chromium.launch(headless=True)
             try:
                 context = await browser.new_context(user_agent=USER_AGENT, viewport={"width": 1280, "height": 800})
+                # Bandwidth optimization: business sites are text-first — abort
+                # heavy media so contact extraction needs far less bandwidth.
+                try:
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
+                            else route.continue_()
+                        ),
+                    )
+                except (PlaywrightError, AttributeError):
+                    pass
 
                 async def _bounded(i: int, url: str) -> None:
                     async with semaphore:

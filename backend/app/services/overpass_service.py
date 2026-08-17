@@ -197,12 +197,16 @@ async def _run_overpass_query(query: str) -> list[dict]:
     return empty_result if empty_result is not None else []
 
 
-async def discover_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
+async def discover_businesses(niche: str, city: str, country: str, limit: int = 50, wider_radius: bool = False) -> list[dict]:
     """Additive OSM/Overpass discovery source. Geocodes city+country to a
     center point (reusing geocoding_service's rate-limited/cached Nominatim
     client), then queries Overpass around that point. Best-effort throughout:
     returns [] rather than raising on any failure (geocode miss, all mirrors
-    down, empty result) so it never blocks the overall discovery search."""
+    down, empty result) so it never blocks the overall discovery search.
+
+    When ``wider_radius=True`` the search uses progressively larger search
+    radii (100km → 250km) to catch businesses further out — used by the
+    discovery-service retry pass when a primary-city scrape came up short."""
     if limit < 1:
         return []
 
@@ -214,14 +218,10 @@ async def discover_businesses(niche: str, city: str, country: str, limit: int = 
     tags, matched = resolve_niche_tags(niche)
     industry = niche.strip().title()
 
-    # A 15km radius plausibly won't hold `limit` real matches for a niche
-    # business type — widen once if the first pass came up short, instead of
-    # silently handing back whatever the smallest radius found. Capped at two
-    # tiers total: each round already races 5 mirrors, so more tiers mainly
-    # adds latency (and more 429s against free mirrors) rather than more
-    # results — OSM's actual coverage for a niche+city is often the real
-    # ceiling, not the radius.
-    radii = [DEFAULT_RADIUS_METERS, 50_000]
+    # Standard radii: 15km -> 50km for a normal search. When wider_radius is
+    # requested (retry pass), push out to 100km -> 250km to catch businesses
+    # on the outskirts that the default tiers miss.
+    radii = [100_000, 250_000] if wider_radius else [DEFAULT_RADIUS_METERS, 50_000]
     collected: list[dict] = []
     seen_keys: set[tuple] = set()
 

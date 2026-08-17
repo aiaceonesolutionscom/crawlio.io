@@ -4,6 +4,20 @@ from app.services import discovery_service
 from app.services.discovery_service import DiscoveryUnavailableError
 
 
+def _mock_secondary_sources(monkeypatch, empty=True):
+    """Mock the secondary crawlers (OSM, directory, wikidata, wikipedia, ct, dns)
+    to return [] so tests only exercise the primary Google Maps source."""
+    async def fake_empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
+
+
 @pytest.mark.asyncio
 async def test_orchestrates_all_sources_and_merges(monkeypatch):
     async def fake_maps(*args, **kwargs):
@@ -15,9 +29,16 @@ async def test_orchestrates_all_sources_and_merges(monkeypatch):
     async def fake_dir(*args, **kwargs):
         return [{"name": "Sakura Dental Studio", "phone": "03001234567", "email": "info@sakura.pk", "source": "directory"}]
 
+    def fake_empty(*args, **kwargs):
+        return []
+
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_osm)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_dir)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     # No DNS in tests — treat every domain as deliverable.
     monkeypatch.setattr(discovery_service.lead_validator.settings, "validate_emails", False)
 
@@ -41,6 +62,10 @@ async def test_drops_leads_without_contact_channel(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5)
     assert leads == []
@@ -54,6 +79,10 @@ async def test_strips_directory_website_but_keeps_phone(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", lambda *a, **k: __import__("asyncio").sleep(0) or [])
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5)
     assert len(leads) == 1
@@ -79,6 +108,10 @@ async def test_tavily_not_called_when_structured_sources_meet_limit(monkeypatch)
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.web_search_service, "find_extra_businesses", fake_tavily)
     monkeypatch.setattr(discovery_service.settings, "tavily_enabled", True)
     monkeypatch.setattr(discovery_service.settings, "tavily_api_key", "test-key")
@@ -106,6 +139,10 @@ async def test_tavily_tops_up_when_structured_sources_fall_short(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.web_search_service, "find_extra_businesses", fake_tavily)
     monkeypatch.setattr(discovery_service.settings, "tavily_enabled", True)
     monkeypatch.setattr(discovery_service.settings, "tavily_api_key", "test-key")
@@ -139,6 +176,10 @@ async def test_tavily_never_called_when_disabled_by_default(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_dir)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.web_search_service, "find_extra_businesses", fake_tavily)
     # tavily_enabled defaults to False — not touched here.
 
@@ -170,6 +211,10 @@ async def test_nearby_city_fallback_tags_results_and_merges(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_osm)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.geo_service, "nearby_cities", fake_nearby)
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "Islamabad", "Pakistan", country_code="PK", limit=5)
@@ -200,6 +245,10 @@ async def test_nearby_city_fallback_never_calls_maps(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.geo_service, "nearby_cities", fake_nearby)
 
     await discovery_service.discover_businesses("Dental Clinic", "Islamabad", "Pakistan", country_code="PK", limit=20)
@@ -225,6 +274,10 @@ async def test_nearby_city_fallback_not_used_when_primary_meets_limit(monkeypatc
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.geo_service, "nearby_cities", fake_nearby)
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=1)
@@ -247,6 +300,10 @@ async def test_nearby_city_fallback_no_candidates_available(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.geo_service, "nearby_cities", fake_nearby)
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "SoloCity", "Testland", country_code="XX", limit=5)
@@ -263,6 +320,48 @@ async def test_raises_when_all_sources_down(monkeypatch):
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fail)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fail)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fail)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fail)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fail)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fail)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fail)
 
     with pytest.raises(DiscoveryUnavailableError):
         await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5)
+
+
+@pytest.mark.asyncio
+async def test_oversampling_requested_from_sources(monkeypatch):
+    """When discover_businesses is asked for `limit`, it should request
+    limit * OVERSAMPLE_FACTOR raw candidates from each source (capped)
+    so validation attrition doesn't leave the result short."""
+    received_limits: dict[str, list[int]] = {}
+
+    async def fake_maps(niche, city, country, limit):
+        received_limits.setdefault("maps", []).append(limit)
+        return [{"name": "Acme", "phone": "03001234567", "source": "google_maps"}]
+
+    async def fake_osm(niche, city, country, limit):
+        received_limits.setdefault("osm", []).append(limit)
+        return []
+
+    async def fake_dir(niche, city, country, limit):
+        received_limits.setdefault("dir", []).append(limit)
+        return []
+
+    async def fake_secondary(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
+    monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_osm)
+    monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_dir)
+    monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_secondary)
+    monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_secondary)
+    monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_secondary)
+    monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_secondary)
+
+    await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=50)
+
+    # Primary scrape: each source receives the oversampled limit (50 * 3 = 150)
+    assert received_limits["maps"][0] == 150
+    assert 150 in received_limits["osm"]
+    assert all(l <= 150 for l in received_limits["osm"])

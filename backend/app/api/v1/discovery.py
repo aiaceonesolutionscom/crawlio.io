@@ -44,7 +44,7 @@ MAX_SCRAPED_PER_SEARCH = 60
 # against whatever gets passed as `limit`, so keep this modest. A larger
 # multiplier just makes the backend chase leads that get discarded by the
 # results[:limit] truncation below anyway.
-FREE_TIER_OVERFETCH_MULTIPLIER = 2
+FREE_TIER_OVERFETCH_MULTIPLIER = 4
 INLINE_ENRICH_CAP = MAX_SCRAPED_PER_SEARCH
 
 
@@ -81,7 +81,7 @@ async def discover(
     limit = max(limit, 1)
 
     enhanced = "lead_discovery_enhanced" in PLAN_CAPABILITIES.get(workspace.plan, set())
-    fetch_limit = limit if enhanced else min(limit * FREE_TIER_OVERFETCH_MULTIPLIER, 100)
+    fetch_limit = limit if enhanced else min(limit * FREE_TIER_OVERFETCH_MULTIPLIER, 120)
 
     country_name = geo_service.country_name_for_code(payload.country) or payload.country
 
@@ -153,11 +153,15 @@ async def discover(
     # Warm the cache now with what we have (fuller when Redis was down and
     # enrichment ran inline above); if background enrichment is still pending,
     # enrich_discovered_batch refreshes this same row once it finishes.
-    await discovery_cache_service.upsert_cache(
-        session, payload.niche, payload.city, payload.country,
-        niche_display=payload.niche, city_display=payload.city, country_display=country_name,
-        items=results,
-    )
+    # Min-results guard: a scrape that fell far short of the requested count is
+    # NOT cached — otherwise a thin/stale result poisons the 2h TTL window and
+    # repeat searches keep serving the same undersized list.
+    if len(results) >= max(limit // 2, 1):
+        await discovery_cache_service.upsert_cache(
+            session, payload.niche, payload.city, payload.country,
+            niche_display=payload.niche, city_display=payload.city, country_display=country_name,
+            items=results,
+        )
 
     await _mark_already_in_workspace(session, workspace.id, results)
     items = [DiscoveredLead(**r) for r in results]

@@ -10,6 +10,7 @@ is not available, a simple `asyncio.create_subprocess_exec` fallback via
 """
 import asyncio
 import logging
+import re
 from typing import Optional
 
 import aiohttp

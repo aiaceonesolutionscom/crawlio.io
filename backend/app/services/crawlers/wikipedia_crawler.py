@@ -24,8 +24,15 @@ async def _fetch_wikipedia(niche: str, city: str, country: str, session: aiohttp
     Returns a list of dicts with keys: id (title), name, description/extract,
     and source="wikipedia".
     """
-    # Search for the niche combined with city/country
+    # Defensive: ensure all inputs are strings
+    niche = str(niche) if niche is not None else ""
+    city = str(city) if city is not None else ""
+    country = str(country) if country is not None else ""
+
+    # Build search query: "niche city country"
     search_query = f"{niche} {city} {country}".strip()
+    if not search_query:
+        return []
 
     params = {
         "action": "query",
@@ -36,42 +43,80 @@ async def _fetch_wikipedia(niche: str, city: str, country: str, session: aiohttp
     }
 
     headers = {"User-Agent": "crawlio/0.1.0 (discovery; +https://crawlio.io)"}
+
     async with session.get(WIKIPEDIA_API_ENDPOINT, params=params, headers=headers) as resp:
         if resp.status != 200:
-            logger.warning("Wikipedia API returned %s for niche=%s city=%s country=%s", resp.status, niche, city, country)
+            logger.warning(
+                "Wikipedia API returned %s for niche=%r city=%r country=%r",
+                resp.status, niche, city, country,
+            )
             return None
-        data = await resp.json()
-        results = []
-        for item in data.get("query", {}).get("search", []):
-            title = item.get("title")
-            if not title:
-                continue
-            # Fetch the extract/summary for the article
-            extract_params = {
-                "action": "query",
-                "format": "json",
-                "prop": "extracts",
-                "explaintext": True,
-                "titles": title,
-            }
-            async with session.get(WIKIPEDIA_API_ENDPOINT, params=extract_params, headers=headers) as resp2:
-                if resp2.status != 200:
+
+        try:
+            data = await resp.json()
+        except Exception as e:
+            logger.warning("Wikipedia JSON parse failed: %s", e)
+            return None
+
+        # Safely extract the search results list
+        try:
+            search_results = data.get("query", {}).get("search", [])
+        except Exception:
+            return None
+
+        results: list[dict] = []
+        for item in search_results:
+            try:
+                title = item.get("title")
+                if not title:
                     continue
-                extract_data = await resp2.json()
-                pages = extract_data.get("query", {}).get("pages", {})
-                for page in pages.values():
-                    extract = page.get("extract")
-                    if not extract:
+
+                # Fetch the extract/summary for this article
+                extract_params = {
+                    "action": "query",
+                    "format": "json",
+                    "prop": "extracts",
+                    "explaintext": True,
+                    "titles": title,
+                }
+                async with session.get(
+                    WIKIPEDIA_API_ENDPOINT, params=extract_params, headers=headers
+                ) as resp2:
+                    if resp2.status != 200:
                         continue
-                    results.append({
-                        "id": title,
-                        "name": title,
-                        "description": extract[:500],  # truncate
-                        "category": niche,
-                        "source": "wikipedia",
-                    })
+                    try:
+                        extract_data = await resp2.json()
+                    except Exception:
+                        continue
+
+                    # Safely get the page extract
+                    try:
+                        pages = extract_data.get("query", {}).get("pages", {})
+                    except Exception:
+                        continue
+
+                    for page in pages.values():
+                        try:
+                            extract = page.get("extract")
+                            if not extract:
+                                continue
+                            results.append(
+                                {
+                                    "id": title,
+                                    "name": title,
+                                    "description": extract[:500],  # truncate
+                                    "category": niche,
+                                    "source": "wikipedia",
+                                }
+                            )
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
             if len(results) >= 20:
                 break
+
         return results
 
 

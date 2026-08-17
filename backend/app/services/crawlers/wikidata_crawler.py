@@ -2,7 +2,7 @@
 
 Queries Wikidata (Wikipedia's sister database) for entities matching a given
 niche (e.g. "restaurant", "clinic") in a given city/country. Uses the Wikidata
-JSON API with SPARQL-ish filters to find items matching the niche and location.
+JSON API with SPARQL filters to find items matching the niche and location.
 
 See https://www.wikidata.org/wiki/Help:SPARQL_queries for the query format.
 """
@@ -22,27 +22,26 @@ def _build_wikidata_sparql(niche: str, city: str, country: str) -> str:
     """Build a SPARQL query for Wikidata search.
 
     Returns the query string with niche, city, and country substituted safely.
+    Uses string concatenation to avoid f-string brace/escaping issues.
     """
     niche_lower = niche.lower()
-    city_normalised = city.strip().lower().replace(" ", "_")
-    country_normalised = country.strip().upper()
-
-    # Use string concatenation to avoid f-string brace issues.
-    query_parts = [
+    # Build query parts using concatenation for safety
+    parts = [
         "SELECT ?item ?itemLabel ?itemDescription ?coordinates ?website ",
         "WHERE {",
         "  SERVICE wikibase:mw {",
         "    bd:serviceParam wikibase:language \"en\". ",
-        "    ?item wikidata:Claim ?p .",
-        f"    FILTER(CONTAINS(LCASE(STR(?itemLabel)), LCASE('{niche_lower}')))",
+        # Filter by label containing the niche (case-insensitive)
+        "    FILTER regex(?itemLabel, \"" + niche_lower + "\", \"i\") ",
         "  }",
+        "  OPTIONAL { ?item wdt:P31 ?type . }",
         "  OPTIONAL { ?item wdt:P625 ?coordinates . }",
         "  OPTIONAL { ?item wdt:P856 ?website . }",
         "  SERVICE wikibase:label { bd:serviceParam wikibase:language \"en\". }",
         "}",
         "LIMIT 50",
     ]
-    return "".join(query_parts)
+    return "".join(parts)
 
 
 async def _fetch_wikidata(niche: str, city: str, country: str, session: aiohttp.ClientSession) -> Optional[list[dict]]:
@@ -60,37 +59,64 @@ async def _fetch_wikidata(niche: str, city: str, country: str, session: aiohttp.
         if resp.status != 200:
             logger.warning("Wikidata query returned %s for niche=%s city=%s country=%s", resp.status, niche, city, country)
             return None
-        data = await resp.json()
+        try:
+            data = await resp.json()
+        except Exception:
+            logger.warning("Wikidata JSON parse failed for niche=%s", niche)
+            return None
         results = []
         for binding in data.get("results", {}).get("bindings", []):
             item = {}
-            item_id = binding.get("item", {}).get("value", "")
-            if item_id:
-                item["id"] = item_id.split("/")[-1]
-            label = binding.get("itemLabel", {}).get("value")
-            if label:
-                item["name"] = label
-            desc = binding.get("itemDescription", {}).get("value")
-            if desc:
-                item["description"] = desc
-            coords = binding.get("coordinates", {}).get("value")
-            if coords:
+            # Safely get item ID from the Wikidata URI
+            item_val = binding.get("item", {}).get("value", "")
+            if item_val:
+                item["id"] = item_val.rsplit("/", 1)[-1]
+            else:
+                item["id"] = ""
+
+            # Safely get label
+            label_val = binding.get("itemLabel", {}).get("value", "")
+            if label_val:
+                item["name"] = label_val
+            else:
+                item["name"] = ""
+
+            # Safely get description
+            desc_val = binding.get("itemDescription", {}).get("value", "")
+            if desc_val:
+                item["description"] = desc_val[:200]  # truncate
+            else:
+                item["description"] = ""
+
+            # Safely get coordinates
+            item["lat"] = None
+            item["lon"] = None
+            coords_val = binding.get("coordinates", {}).get("value", "")
+            if coords_val:
                 try:
-                    # Wikibate coordinates format:POINT(lat lon)
-                    # or the internal format with T and ^ separators
-                    if "T" in coords:
-                        lat_lon = coords.split("T")[1].split("^")
+                    # Handle Wikibase coordinate format: POINT(lat lon) or internal format
+                    if "T" in coords_val:
+                        lat_lon = coords_val.split("T")[1].split("^")
                         item["lat"] = float(lat_lon[0])
                         item["lon"] = float(lat_lon[1])
                     else:
-                        # POINT format
-                        item["lat"] = None
-                        item["lon"] = None
+                        # Try POINT format: split by space after POINT(
+                        if "POINT(" in coords_val:
+                            coords_clean = coords_val.replace("POINT(", "").replace(")", "")
+                            parts = coords_clean.split()
+                            if len(parts) >= 2:
+                                item["lat"] = float(parts[0])
+                                item["lon"] = float(parts[1])
                 except Exception:
                     pass
-            web = binding.get("website", {}).get("value")
-            if web:
-                item["website"] = web
+
+            # Safely get website
+            web_val = binding.get("website", {}).get("value", "")
+            if web_val:
+                item["website"] = web_val
+            else:
+                item["website"] = ""
+
             item["category"] = niche
             item["source"] = "wikidata"
             results.append(item)

@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # Shared, global cache of validated discovery results per niche+city+country
     # (not workspace-scoped) — repeat searches across every workspace reuse the
     # same scrape instead of re-hitting Google Maps/OSM/directories each time.
-    discovery_cache_ttl_hours: int = 24
+    discovery_cache_ttl_hours: int = 2
     # Demand-driven background pre-warm crawler (Celery beat) — refreshes cache
     # rows before they expire, spread gently across the day. Off by default:
     # it needs Redis + a running worker + beat process, which isn't guaranteed

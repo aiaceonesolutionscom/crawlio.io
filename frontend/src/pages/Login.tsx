@@ -27,6 +27,10 @@ const CLERK_APPEARANCE = {
     dividerLine: 'bg-ink-700',
     dividerText: 'text-chalk-faint bg-ink-950',
     formFieldErrorText: 'text-red-400',
+    footer: '[&>*]:hidden',
+    brandedShine: 'hidden',
+    badge: 'hidden',
+    logoImage: 'hidden',
   }
 };
 

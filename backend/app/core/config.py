@@ -33,13 +33,13 @@ class Settings(BaseSettings):
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
-                    self.cors_origins = [str(x) for x in parsed]
+                    self.cors_origins = [str(x).rstrip("/") for x in parsed]
                 elif isinstance(parsed, str):
-                    self.cors_origins = [parsed]
+                    self.cors_origins = [parsed.rstrip("/")]
                 else:
                     self.cors_origins = list(_DEFAULT_CORS)
             except (json.JSONDecodeError, ValueError):
-                self.cors_origins = [u.strip() for u in raw.split(",") if u.strip()]
+                self.cors_origins = [u.strip().rstrip("/") for u in raw.split(",") if u.strip()]
         logger.info("CORS origins: %s", self.cors_origins)
 
         raw_emails = self.super_admin_emails.strip() if self.super_admin_emails else ""

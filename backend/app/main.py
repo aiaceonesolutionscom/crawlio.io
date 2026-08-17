@@ -39,15 +39,19 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(title="Crawlio API", lifespan=_lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins if isinstance(settings.cors_origins, list) and settings.cors_origins else [
+_cors = [o.rstrip("/") for o in (settings.cors_origins if isinstance(settings.cors_origins, list) and settings.cors_origins else [])]
+if not _cors:
+    _cors = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
         "https://triconrepublic.com",
         "http://triconrepublic.com",
-    ],
+    ]
+logging.getLogger(__name__).info("CORS allowed origins: %s", _cors)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

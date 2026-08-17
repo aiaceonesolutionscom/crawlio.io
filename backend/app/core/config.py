@@ -4,7 +4,13 @@ from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEFAULT_CORS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:5174"]
+_DEFAULT_CORS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "https://triconrepublic.com",
+    "http://triconrepublic.com",
+]
 logger = logging.getLogger(__name__)
 
 

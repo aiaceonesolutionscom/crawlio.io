@@ -6,6 +6,10 @@ class Settings(BaseSettings):
 
     env: str = "development"
     database_url: str = "postgresql+asyncpg://crawlio:crawlio@localhost:5432/crawlio"
+
+    def model_post_init(self, __context) -> None:
+        if self.database_url.startswith("postgresql://"):
+            self.database_url = self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:5174"]
 
     clerk_jwks_url: str = ""
@@ -27,7 +31,7 @@ class Settings(BaseSettings):
     # fingerprint. Higher = closer to the requested lead count, at the cost of
     # more requests per search; for volume beyond this, use proxy_url rather
     # than raising it unbounded.
-    google_maps_search_limit: int = 20
+    google_maps_search_limit: int = 50
     # Optional proxy for the crawlers (anti-bot), e.g. "http://user:pass@host:port".
     proxy_url: str = ""
     directory_enabled: bool = True
@@ -45,8 +49,8 @@ class Settings(BaseSettings):
     # contributes name + website candidates only, never guessed contact info —
     # see web_search_service.py for why that's safe.
     tavily_api_key: str = ""
-    tavily_enabled: bool = False
-    tavily_max_results: int = 10
+    tavily_enabled: bool = True
+    tavily_max_results: int = 40
 
     # Shared, global cache of validated discovery results per niche+city+country
     # (not workspace-scoped) — repeat searches across every workspace reuse the

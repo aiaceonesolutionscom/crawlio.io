@@ -28,6 +28,7 @@ backend/.mypy_cache/
 
 # Local tooling state
 .claude/
+.opencode/
 *.pid
 
 # Stray nested clone (redundant reference copy, has its own .git)

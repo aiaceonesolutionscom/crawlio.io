@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sys
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,13 @@ from contextlib import asynccontextmanager
 # so this holds regardless of how the server is launched.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+# Surface INFO logs (source counts, lookups, skips) in the API process — the
+# root logger's default WARNING hides the discovery diagnostics entirely.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

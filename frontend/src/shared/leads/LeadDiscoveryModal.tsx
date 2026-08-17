@@ -7,6 +7,7 @@ import { cn } from '../utils/cn';
 import { searchCountries, searchCities, type CountryDTO, type CityDTO } from '../../lib/api/geo';
 import {
   discoverLeads,
+  discoverStatus,
   importDiscoveredLeads,
   suggestNiches,
   type DiscoveredLeadDTO
@@ -58,6 +59,7 @@ export function LeadDiscoveryModal({
   const [cityOpen, setCityOpen] = useState(false);
 
   const [isSearching, setIsSearching] = useState(false);
+  const [searchId, setSearchId] = useState<string | null>(null);
   const [searchStage, setSearchStage] = useState('');
   const [searchError, setSearchError] = useState<string | null>(null);
   const [results, setResults] = useState<DiscoveredLeadDTO[]>([]);
@@ -86,6 +88,7 @@ export function LeadDiscoveryModal({
     setCityOptions([]);
     setCityOpen(false);
     setIsSearching(false);
+    setSearchId(null);
     setSearchError(null);
     setResults([]);
     setSelected(new Set());
@@ -137,10 +140,9 @@ export function LeadDiscoveryModal({
     return () => window.clearTimeout(timeout);
   }, [cityQuery, country, city, open, getToken]);
 
-  // Real progress isn't pushed from the backend (the search is one blocking
-  // request), so this cycles honest, generically-true status text based on
-  // elapsed time — better than a bare spinner for a search that can take
-  // anywhere from ~2s to ~20s depending on how many sources respond.
+  // Discovery runs in the background server-side (the POST returns a search_id
+  // instantly), so while the crawl is live we poll the status endpoint for
+  // results and keep the honest progress text cycling until items land.
   useEffect(() => {
     if (!isSearching) {
       setSearchStage('');
@@ -168,6 +170,62 @@ export function LeadDiscoveryModal({
     }, 3500);
     return () => window.clearInterval(interval);
   }, [isSearching, enhancedTier]);
+
+  useEffect(() => {
+    if (!searchId || !open) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let attempts = 0;
+    let polls = 0;
+
+    const poll = async () => {
+      try {
+        const token = await getToken();
+        const res = await discoverStatus(token, searchId);
+        if (cancelled) return;
+        if (res.status === 'failed') {
+          setSearchError('The search could not complete. Please try again.');
+          setResults([]);
+          setSearchId(null);
+          setIsSearching(false);
+          return;
+        }
+        if (res.items.length > 0 || res.status === 'done') {
+          setResults(res.items);
+          setSelected(new Set(res.items.map((_, i) => i).filter((i) => !res.items[i].already_in_workspace)));
+          setSearchId(null);
+          setIsSearching(false);
+          return;
+        }
+        polls += 1;
+        if (polls >= 240) {
+          setSearchError('The search took too long and was stopped. Please try a smaller count or try again.');
+          setResults([]);
+          setSearchId(null);
+          setIsSearching(false);
+          return;
+        }
+        timer = window.setTimeout(() => void poll(), 2500);
+      } catch (err) {
+        if (cancelled) return;
+        attempts += 1;
+        if (attempts >= 8) {
+          setSearchError(err instanceof ApiError ? err.message : 'Could not reach the search service. Please try again.');
+          setResults([]);
+          setSearchId(null);
+          setIsSearching(false);
+          return;
+        }
+        timer = window.setTimeout(() => void poll(), 2500);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [searchId, open, getToken]);
 
   const canSearch =
     niche.trim().length > 0 &&
@@ -235,18 +293,24 @@ export function LeadDiscoveryModal({
         limit: requestedCount
       });
       setLastRequestedCount(requestedCount);
-      setResults(res.items);
       setEnhanced(res.enhanced);
       setDailyLimit(res.daily_limit);
       setRemainingToday(res.remaining_today);
+      if (res.search_id) {
+        // Crawl runs in the background — keep "searching" state on and let the
+        // polling effect surface results when the status endpoint has them.
+        setSearchId(res.search_id);
+        return;
+      }
+      setResults(res.items);
       // Pre-select only what's actually new — an already-in-CRM lead would
       // just be silently skipped as a duplicate on import anyway, so leaving
       // it checked by default makes a repeat search look like nothing changed.
       setSelected(new Set(res.items.map((_, i) => i).filter((i) => !res.items[i].already_in_workspace)));
+      setIsSearching(false);
     } catch (err) {
       setSearchError(err instanceof ApiError ? err.message : 'Search failed. Please try again.');
       setResults([]);
-    } finally {
       setIsSearching(false);
     }
   };

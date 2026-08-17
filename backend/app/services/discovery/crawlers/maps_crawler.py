@@ -34,9 +34,9 @@ from app.services.discovery.crawlers.base import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
-NAV_TIMEOUT_MS = 10_000
+NAV_TIMEOUT_MS = 15_000
 FEED_WAIT_MS = 6_000
-SETTLE_MS = 700
+SETTLE_MS = 500
 # How many times we scroll the result feed before giving up on loading more.
 MAX_SCROLLS = 24
 # Concurrent place-page visits — bounded so a large request (e.g. 50 leads)
@@ -409,44 +409,46 @@ async def _search_businesses_once(
     return links, None
 
 
-async def search_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
-    """Search Google Maps for a niche in a city and return real place records.
-
-    Returns [] on any failure/block (never raises) so the orchestrator can fall
-    back to other free sources.
-    """
-    if _breaker.open:
-        logger.warning("Google Maps circuit open — skipping crawl")
-        return []
-    limit = max(1, min(limit, settings.google_maps_max_results))
+async def _crawl_once(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    """One full crawl attempt: launch chromium, search the feed, scrape each
+    place panel. Returns [] on any failure — never raises. Callers retry on
+    transient failures (browser crash, network blip) before giving up."""
     url = _query_url(niche, city, country)
     records: list[dict] = []
 
-    try:
-        async with async_playwright() as p:
-            launch_kwargs = {"headless": settings.google_maps_headless, "args": _CHROMIUM_ARGS}
-            if api_key("proxy_url"):
-                launch_kwargs["proxy"] = {"server": api_key("proxy_url")}
+    async with async_playwright() as p:
+        launch_kwargs = {"headless": settings.google_maps_headless, "args": _CHROMIUM_ARGS}
+        if api_key("proxy_url"):
+            launch_kwargs["proxy"] = {"server": api_key("proxy_url")}
+        try:
+            browser = await p.chromium.launch(**launch_kwargs)
+        except PlaywrightError as exc:
+            logger.warning("Google Maps crawler could not launch chromium: %s (%s)", exc, _CHROMIUM_HINT)
+            return []
+        try:
+            context = await browser.new_context(
+                user_agent=USER_AGENT,
+                locale="en-PK",
+                viewport={"width": 1280, "height": 900},
+            )
             try:
-                browser = await p.chromium.launch(**launch_kwargs)
-            except PlaywrightError as exc:
-                logger.warning("Google Maps crawler could not launch chromium: %s (%s)", exc, _CHROMIUM_HINT)
-                return []
-            try:
-                context = await browser.new_context(
-                    user_agent=USER_AGENT,
-                    locale="en-PK",
-                    viewport={"width": 1280, "height": 900},
+                await context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
                 )
+            except (AttributeError, PlaywrightError):  # test doubles / older context
+                pass
+            try:
+                page = await context.new_page()
                 try:
-                    await context.add_init_script(
-                        "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-                    )
-                except (AttributeError, PlaywrightError):  # test doubles / older context
-                    pass
-                try:
-                    page = await context.new_page()
-                    try:
+                    feed, hint = await _search_businesses_once(page, url, niche, city, limit)
+                    if hint:
+                        logger.warning(
+                            "Google Maps blocked for %s in %s (hint: %r) — run headful or set PROXY_URL",
+                            niche, city, hint,
+                        )
+                        return []
+                    if not feed:
+                        logger.info("Google Maps empty on first attempt for %s in %s — retrying", niche, city)
                         feed, hint = await _search_businesses_once(page, url, niche, city, limit)
                         if hint:
                             logger.warning(
@@ -454,58 +456,86 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                                 niche, city, hint,
                             )
                             return []
-                        if not feed:
-                            logger.info("Google Maps empty on first attempt for %s in %s — retrying", niche, city)
-                            feed, hint = await _search_businesses_once(page, url, niche, city, limit)
-                            if hint:
-                                logger.warning(
-                                    "Google Maps blocked for %s in %s (hint: %r) — run headful or set PROXY_URL",
-                                    niche, city, hint,
-                                )
-                                return []
-                    except PlaywrightError as exc:
-                        logger.warning("Google Maps feed not found for %s in %s: %s", niche, city, exc)
-                        return []
+                except PlaywrightError as exc:
+                    logger.warning("Google Maps feed not found for %s in %s: %s", niche, city, exc)
+                    return []
 
-                    if not feed:
-                        try:
-                            title = (await page.title()).strip() or page.url
-                        except PlaywrightError:
-                            title = page.url
-                        logger.warning(
-                            "Google Maps feed not found for %s in %s (page: %s)",
-                            niche, city, title,
-                        )
-                        return []
+                if not feed:
+                    try:
+                        title = (await page.title()).strip() or page.url
+                    except PlaywrightError:
+                        title = page.url
+                    logger.warning(
+                        "Google Maps feed not found for %s in %s (page: %s)",
+                        niche, city, title,
+                    )
+                    return []
 
-                    # Panel details per place, bounded by the requested limit.
-                    panel_limit = max(1, min(len(feed), settings.google_maps_search_limit, limit))
-                    semaphore = asyncio.Semaphore(_PLACE_CONCURRENCY)
+                # Panel details per place, bounded by the requested limit.
+                panel_limit = max(1, min(len(feed), settings.google_maps_search_limit, limit))
+                semaphore = asyncio.Semaphore(_PLACE_CONCURRENCY)
 
-                    async def _scrape_one(card: dict) -> Optional[dict]:
-                        async with semaphore:
-                            await _human_pause(0.6, 1.8)
-                            record = await _scrape_place(context, card)
-                            if record.get("name"):
-                                record.setdefault("source", "google_maps")
-                                return record
-                            return None
+                async def _scrape_one(card: dict) -> Optional[dict]:
+                    async with semaphore:
+                        await _human_pause(0.6, 1.8)
+                        record = await _scrape_place(context, card)
+                        if record.get("name"):
+                            record.setdefault("source", "google_maps")
+                            return record
+                        return None
 
-                    scraped = await asyncio.gather(*(_scrape_one(card) for card in feed[:panel_limit]))
-                    records = [r for r in scraped if r is not None]
-                finally:
-                    await page.close()
+                scraped = await asyncio.gather(*(_scrape_one(card) for card in feed[:panel_limit]))
+                records = [r for r in scraped if r is not None]
             finally:
-                await browser.close()
+                await page.close()
+        finally:
+            await browser.close()
+
+    return records
+
+
+async def search_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
+    """Search Google Maps for a niche in a city and return real place records.
+
+    Returns [] on any failure/block (never raises) so the orchestrator can fall
+    back to other free sources. Transient failures (browser crash, connection
+    drop mid-crawl) are retried once; only a second consecutive failure trips
+    the circuit breaker. An empty-but-unblocked result (thin market, genuinely
+    no listings) is NOT retried — that's a real answer, not a transient error.
+    """
+    if _breaker.open:
+        logger.warning("Google Maps circuit open — skipping crawl")
+        return []
+    limit = max(1, min(limit, settings.google_maps_max_results))
+
+    retryable = False
+    try:
+        records = await _crawl_once(niche, city, country, limit)
     except PlaywrightError as exc:
         logger.warning("Google Maps crawler failed for %s in %s: %s", niche, city, exc)
-        _breaker.record_failure()
-        return []
+        retryable = True
+        records = []
     except Exception as exc:
         logger.warning("Google Maps crawler failed unexpectedly for %s in %s: %s", niche, city, exc)
-        _breaker.record_failure()
-        return []
+        retryable = True
+        records = []
 
-    _breaker.record_success()
+    if retryable:
+        # Browser crash ("Connection closed while reading from the driver") and
+        # network blips are common and transient — retry the whole crawl once.
+        await asyncio.sleep(1.5)
+        logger.info("Google Maps crawl retry for %s in %s", niche, city)
+        try:
+            records = await _crawl_once(niche, city, country, limit)
+        except Exception as exc:
+            logger.warning("Google Maps crawler failed on retry for %s in %s: %s", niche, city, exc)
+            records = []
+
+    # Only a real failure (exception/crash) trips the breaker; a thin market or
+    # a blocked-but-still-returning crawl is just an empty answer.
+    if retryable and not records:
+        _breaker.record_failure()
+    elif records:
+        _breaker.record_success()
     logger.info("Google Maps crawl for %s in %s returned %d records", niche, city, len(records))
     return records

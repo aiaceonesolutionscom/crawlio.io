@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.services.discovery.contact_extraction import (
 
     DISPOSABLE_EMAIL_DOMAINS,
+    EMAIL_BLOCKLIST_DOMAINS,
     PLACEHOLDER_LOCAL_PARTS,
     SYSTEM_EMAIL_LOCAL_PARTS,
 )
@@ -136,6 +137,10 @@ def validate_email(email: str) -> Optional[str]:
     if _is_placeholder_email(local):
         return None
     if domain in DISPOSABLE_EMAIL_DOMAINS:
+        return None
+    # System/telemetry domains (e.g. o477720.ingest.sentry.io) must be rejected
+    # by suffix — a subdomain is just as fake as the bare blocked domain.
+    if any(domain == d or domain.endswith("." + d) for d in EMAIL_BLOCKLIST_DOMAINS):
         return None
     if settings.validate_emails and not _has_mx(domain):
         return None

@@ -39,6 +39,7 @@ from app.services.discovery import (
     overpass_service,
     website_lookup_service,
 )
+from app.services.discovery.geocoding_service import _looks_like_address
 from app.services.discovery.crawlers import (
 
     directory_scraper,
@@ -59,8 +60,8 @@ _NEARBY_CITY_FALLBACKS = 2
 # raw candidates missing contact info get their website looked up and scraped
 # so name-only OSM/Geoapify/Nominatim records become real, contact-validated
 # leads. Capped to bound request latency (each scrape is a real site visit).
-_CANDIDATE_ENRICH_CAP = 40
-_LOOKUP_CONCURRENCY = 6
+_CANDIDATE_ENRICH_CAP = 60
+_LOOKUP_CONCURRENCY = 10
 
 
 class DiscoveryUnavailableError(Exception):
@@ -80,6 +81,13 @@ def _clean_record(item: dict, niche: str, country_code: str) -> Optional[dict]:
     website = item.get("website")
     if website and not is_own_website(website):
         item["website"] = None
+
+    # An address that is actually search-query/boilerplate text ("best dental
+    # clinic near me ...", "Located at ... call ... for appointments") is junk —
+    # strip it rather than surface it as a real street address.
+    address = item.get("address")
+    if address and _looks_like_address(str(address)) is False:
+        item["address"] = None
 
     validated = lead_validator.validate_lead(item, country_code)
     if validated is None:
@@ -174,7 +182,10 @@ async def _enrich_candidates(
     semaphore = asyncio.Semaphore(_LOOKUP_CONCURRENCY)
 
     async def _find(c: dict) -> Optional[str]:
-        if c.get("website"):
+        # A website that is not the business's own (directory/portal/news/maps
+        # listing) is worse than no website — treat it as missing and re-look it
+        # up so we never attribute a listing page as the business's own site.
+        if c.get("website") and is_own_website(c["website"]):
             return c["website"]
         async with semaphore:
             return await website_lookup_service.find_business_website(c["name"], city, country)
@@ -290,7 +301,9 @@ async def discover_businesses(
     # never runs otherwise, and never overrides anything already found (see
     # web_search_service.py and lead_merger._SOURCE_PRIORITY).
     if settings.tavily_enabled and api_key("tavily_api_key") and len(cleaned) < limit:
-        extra = await web_search_service.find_extra_businesses(niche, city, country, limit - len(cleaned))
+        extra = await web_search_service.find_extra_businesses(
+            niche, city, country, limit - len(cleaned), country_code=country_code
+        )
         if extra:
             remerged = lead_merger.merge_businesses(cleaned + extra)
             cleaned = _validate_all(remerged, niche, country_code, limit)

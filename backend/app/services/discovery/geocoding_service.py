@@ -17,6 +17,7 @@ query so the same city isn't re-geocoded on every lead in a batch.
 """
 import asyncio
 import logging
+import re
 import time
 from typing import Optional
 
@@ -110,7 +111,7 @@ async def geocode_business(address: Optional[str], city: str, country: str) -> O
     city+country — city-level accuracy is still far better than no coordinate
     at all or the old (0, 0) fallback."""
     candidates = []
-    if address and address.strip().lower() not in {city.strip().lower(), ""}:
+    if address and address.strip().lower() not in {city.strip().lower(), ""} and _looks_like_address(address):
         candidates.append(f"{address}, {city}, {country}".strip(", "))
     candidates.append(f"{city}, {country}".strip(", "))
 
@@ -119,6 +120,35 @@ async def geocode_business(address: Optional[str], city: str, country: str) -> O
         if result:
             return result
     return None
+
+
+_QUERY_LIKE_MARKERS = (
+    "near me", "best ", "top ", "for appointments", "scheduling",
+    "consultation", "call ", "contact us", "book appointment", "click here",
+)
+
+
+def _looks_like_address(text: str) -> bool:
+    """Heuristic: a scraped 'address' must actually look like a street address,
+    not search-query text / page boilerplate that sometimes leaks into the field
+    (e.g. "Located at ... call +92 ... for appointments"). Rejects anything too
+    long (multi-paragraph scrape text) or carrying query-like phrases."""
+    if not text:
+        return False
+    cleaned = (text or "").strip()
+    if len(cleaned) > 160:
+        return False
+    lowered = cleaned.lower()
+    if any(marker in lowered for marker in _QUERY_LIKE_MARKERS):
+        return False
+    # A real address almost always contains a street marker or a house/shop/block
+    # marker plus digits; pure prose ("Great clinic near the mall") is rejected.
+    if re.search(r"\b(road|street|st\.?|lane|avenue|boulevard|block|colony|"
+                 r"society|house no|shop no|plaza|market|phase|garden)\b", lowered):
+        return True
+    if re.search(r"\d+", lowered):
+        return True
+    return False
 
 
 # --- Nominatim POI search (a second, distinct discovery surface over OSM) -------
@@ -180,51 +210,90 @@ def _poi_record(item: dict, city_en: str) -> Optional[dict]:
 
 
 async def search_places(niche: str, city: str, country: str, limit: int = 20) -> list[dict]:
-    """Search OSM for business POIs by free text (``"{niche} in {city},
+    """Search OSM for business POIs by free text (e.g. ``"{niche} in {city},
     {country}"``) — a discovery surface Nominatim offers natively that
     complements Overpass's tag matching, reusing the same rate-limited/cached
     client as :func:`geocode` so the two never exceed Nominatim's 1 req/s
     policy combined. Best-effort throughout: returns [] on any failure so it
-    can never block the overall discovery search."""
+    can never block the overall discovery search.
+
+    Nominatim's free-text search is finicky: the same niche phrased with
+    "in"/"of" can return 0 results while the bare form returns several. So
+    several query phrasings are tried (niche+city+country, bare niche+city,
+    pluralized niche, "in" phrasing) and their results merged + de-duplicated.
+    """
     if limit < 1:
         return []
-    query = f"{niche} in {city}, {country}".strip()
-    if not query:
-        return []
-    limit = max(1, min(limit, 30))
+    limit = max(1, min(limit, 50))
 
-    key = _cache_key(query)
-    if key in _poi_cache:
-        return list(_poi_cache[key])
+    def _plural(word: str) -> str:
+        word = word.strip()
+        if not word or len(word) <= 2:
+            return word
+        if word.endswith(("s", "es", "ies")):
+            return word
+        if word.endswith("y") and len(word) > 3:
+            return word[:-1] + "ies"
+        return word + "s"
+
+    niche = niche.strip()
+    plural_niche = _plural(niche)
+    variants: list[str] = []
+    for base_niche in {niche, plural_niche}:
+        for phrasing in (
+            f"{base_niche} {city} {country}",
+            f"{base_niche} {city}",
+            f"{base_niche} in {city}, {country}",
+            f"{base_niche} in {city}",
+        ):
+            cleaned = " ".join((phrasing or "").split()).strip()
+            if cleaned and cleaned not in variants:
+                variants.append(cleaned)
 
     results: list[dict] = []
-    async with _lock:
-        if key in _poi_cache:
-            return list(_poi_cache[key])
-        await _throttle()
-        try:
-            async with httpx.AsyncClient(timeout=15.0, headers={"User-Agent": USER_AGENT}) as client:
-                resp = await client.get(
-                    NOMINATIM_URL,
-                    params={
-                        "q": query,
-                        "format": "jsonv2",
-                        "limit": limit,
-                        "addressdetails": 1,
-                        "extratags": 1,
-                        "accept-language": "en",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            logger.warning("Nominatim POI search failed for %r: %s", query, exc)
-            data = []
+    seen_keys: set[tuple] = set()
+    for query in variants:
+        if not query:
+            continue
+        key = _cache_key(query)
+        async with _lock:
+            if key in _poi_cache:
+                cached = list(_poi_cache[key])
+            else:
+                await _throttle()
+                cached = []
+                try:
+                    async with httpx.AsyncClient(timeout=15.0, headers={"User-Agent": USER_AGENT}) as client:
+                        resp = await client.get(
+                            NOMINATIM_URL,
+                            params={
+                                "q": query,
+                                "format": "jsonv2",
+                                "limit": limit,
+                                "addressdetails": 1,
+                                "extratags": 1,
+                                "accept-language": "en",
+                            },
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    logger.warning("Nominatim POI search failed for %r: %s", query, exc)
+                    data = []
 
-        for item in data:
-            record = _poi_record(item, city)
-            if record:
-                results.append(record)
+                for item in data:
+                    record = _poi_record(item, city)
+                    if record:
+                        cached.append(record)
+                _poi_cache[key] = cached
 
-    _poi_cache[key] = results
-    return list(results)
+        for record in cached:
+            dedup_key = (record["name"].lower(), record["phone"] or "", record["website"] or "")
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            results.append(record)
+            if len(results) >= limit:
+                return results
+
+    return results[:limit]

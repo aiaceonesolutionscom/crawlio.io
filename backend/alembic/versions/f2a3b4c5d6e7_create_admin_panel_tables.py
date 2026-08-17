@@ -171,8 +171,8 @@ def upgrade() -> None:
         sa.column("capabilities", sa.JSON),
         sa.column("sort_order", sa.Integer),
         sa.column("is_active", sa.Boolean),
-        sa.column("created_at", sa.DateTime),
-        sa.column("updated_at", sa.DateTime),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
     )
     seeded_at = datetime.now(timezone.utc)
     op.bulk_insert(

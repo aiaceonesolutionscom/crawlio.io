@@ -117,13 +117,30 @@ def _parse_feature(feature: dict, city_en: str) -> Optional[dict]:
     except (TypeError, ValueError):
         lat, lon = None, None
 
-    phone = raw.get("contact:phone") or raw.get("phone") or props.get("phone")
+    # Geoapify publishes phones under several raw keys — most commonly `mobile`
+    # for cell numbers, plus `phone`/`contact:phone` and `fax` for landlines —
+    # so check them all (and any props-level phone/mobile) before giving up.
+    phone = (
+        raw.get("contact:phone")
+        or raw.get("phone")
+        or raw.get("mobile")
+        or raw.get("contact:mobile")
+        or raw.get("fax")
+        or props.get("phone")
+        or props.get("mobile")
+    )
     website = raw.get("contact:website") or raw.get("website") or props.get("website")
     email = raw.get("contact:email") or raw.get("email")
 
     line1 = props.get("address_line1") or ""
     line2 = props.get("address_line2") or ""
     address = line1 if line1 == line2 else ", ".join(p for p in [line1, line2] if p)
+    if not address:
+        # address_line* are sometimes just the business name; fall back to the
+        # raw street/city tags, which carry the real street address.
+        street = ", ".join(p for p in [raw.get("housenumber"), raw.get("street")] if p)
+        raw_city = raw.get("city") or raw.get("addr:city")
+        address = ", ".join(p for p in [street, raw_city or city_en] if p)
     if not address:
         address = city_en
 

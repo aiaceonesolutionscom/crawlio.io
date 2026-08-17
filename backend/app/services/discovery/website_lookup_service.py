@@ -1,5 +1,5 @@
 """Free, keyless business-website lookup via a chain of plain-HTML search
-engines (DuckDuckGo -> Bing -> Google).
+engines (Tavily -> DuckDuckGo -> Bing -> Google).
 
 The discovery sources that are thin on contact data (OSM, Geoapify, Nominatim,
 directories) usually still return the business *name* and *address*. This module
@@ -8,8 +8,10 @@ search endpoints (no API key, no billing) and taking the first result that
 looks like the business's own site.
 
 Engines are tried in order so that when one is blocked, rate-limited, or
-unreachable (DuckDuckGo frequently drops the plain-HTML endpoint) the next one
-still answers.
+unreachable (DuckDuckGo frequently drops the plain-HTML endpoint, Google now
+returns 429 on automated /search) the next one still answers. When a Tavily key
+is configured it runs first: it is far more reliable than the HTML engines and
+its `content` snippet lets us match the exact business name to the result URL.
 
 Safety rules, load-bearing:
 - Only the business's OWN website is returned — directory/portal/social/maps
@@ -29,10 +31,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
+from app.core.config import settings
+from app.core.integration_runtime import api_key
 from app.services.discovery.contact_extraction import is_own_website
 
 logger = logging.getLogger(__name__)
 
+TAVILY_URL = "https://api.tavily.com/search"
 DDG_URL = "https://html.duckduckgo.com/html/"
 BING_URL = "https://www.bing.com/search"
 GOOGLE_URL = "https://www.google.com/search"
@@ -114,6 +119,38 @@ def _google_parse(html: str) -> List[str]:
 #: (name, url, query-builder, html parser, per-engine timeout)
 Engine = tuple[str, str, Callable[[str], dict], Callable[[str], List[str]], float]
 
+# Generic words that never identify *which* business a site belongs to — a
+# "dental clinic" page could be anyone's. Only *distinctive* words from the
+# business name are allowed to vouch for a result domain.
+_GENERIC_NAME_WORDS = {
+    "dental", "dentist", "dentistry", "clinic", "clinics", "care", "center",
+    "centre", "hospital", "medical", "med", "dr", "doctor", "doctors", "lab",
+    "labs", "laboratory", "opd", "group", "associates", "associate",
+    "services", "service", "and", "the", "of", "co", "ltd", "limited", "pvt",
+    "private", "smile", "smiles", "best", "top", "near", "me", "in", "karachi",
+    "lahore", "islamabad", "pakistan",
+}
+
+
+def _distinctive_words(name: str) -> set[str]:
+    """Words that can single out a business (e.g. "sarwar" in "M. Sarwar
+    Dental Clinic"), excluding the generic tokens every dental page shares."""
+    words = set(re.findall(r"[a-z]{3,}", (name or "").lower()))
+    return words - _GENERIC_NAME_WORDS
+
+
+def _domain_matches_name(name: str, href: str) -> bool:
+    """Require a distinctive business-name word to appear in the result's host
+    (e.g. inspiredental.net for "Inspire Dental Network"). Rejects lookalike
+    doctors' sites (profdrnavidrashidqureshi.com for "M. Sarwar Dental
+    Clinic"). When a name is all-generic, fall back to accepting any own-domain
+    result — the name is too vague to filter on."""
+    host = urlparse(href).netloc.lower()
+    distinctive = _distinctive_words(name)
+    if not distinctive:
+        return True
+    return any(word in host for word in distinctive)
+
 def _ddg_params(query: str) -> dict:
     return {"q": query}
 
@@ -154,11 +191,57 @@ async def _run_engine(
         href = _parse_href(raw)
         if not href or not is_own_website(href):
             continue
+        if not _domain_matches_name(name, href):
+            continue
         host = urlparse(href).netloc.lower().removeprefix("www.")
         if host in seen_hosts:
             continue
         seen_hosts.add(host)
         logger.info("Website lookup %s found %s -> %s", label, name, href)
+        return href
+    return None
+
+
+async def _tavily_lookup(client: httpx.AsyncClient, query: str, name: str) -> Optional[str]:
+    """Tavily search for the business name. Returns the first result that is
+    the business's own website, using Tavily's page snippet to require the
+    actual business name on the page (so a lookalike domain doesn't win).
+    Returns None when Tavily is disabled/unconfigured/failed or no suitable
+    result exists — never raises."""
+    if not settings.tavily_enabled or not api_key("tavily_api_key"):
+        return None
+    try:
+        resp = await client.post(
+            TAVILY_URL,
+            json={
+                "api_key": api_key("tavily_api_key"),
+                "query": query,
+                "search_depth": "basic",
+                "max_results": MAX_RESULTS,
+            },
+            timeout=10.0,
+        )
+        if resp.status_code >= 400:
+            logger.info("Website lookup tavily returned %d for %s", resp.status_code, name)
+            return None
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Website lookup tavily failed for %s: %s", name, exc)
+        return None
+
+    name_words = {w for w in re.split(r"\W+", (name or "").lower()) if len(w) >= 3}
+    for result in data.get("results", []) or []:
+        href = (result.get("url") or "").strip()
+        if not href or not is_own_website(href):
+            continue
+        if not _domain_matches_name(name, href):
+            continue
+        snippet = f"{result.get('title') or ''} {result.get('content') or ''}".lower()
+        # Require the business name (or a distinctive >=4-char word of it) on
+        # the page so a generically-named or lookalike domain is rejected.
+        if name and name.lower() not in snippet and not (name_words & set(re.findall(r"[a-z]{4,}", snippet))):
+            continue
+        logger.info("Website lookup tavily found %s -> %s", name, href)
         return href
     return None
 
@@ -170,6 +253,9 @@ async def find_business_website(name: str, city: str, country: str) -> Optional[
     lookup fails — never raises."""
     query = f'"{name.strip()}" {city.strip()}, {country.strip()}'
     async with httpx.AsyncClient(timeout=10.0, headers=HEADERS, follow_redirects=True) as client:
+        tavily = await _tavily_lookup(client, query, name)
+        if tavily:
+            return tavily
         for engine in ENGINES:
             result = await _run_engine(client, engine, query, name)
             if result:

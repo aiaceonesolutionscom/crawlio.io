@@ -50,6 +50,10 @@ NON_WEBSITE_DOMAINS = {
     "yelp.com", "tripadvisor.com", "maps.google.com", "goo.gl", "youtube.com",
     "wikipedia.org", "foursquare.com", "justdial.com", "yellowpages.com",
     "waze.com", "maps.apple.com", "bing.com", "openstreetmap.org",
+    "about.me", "linktr.ee", "linkin.bio", "beacons.ai",
+    # Auto-generated preview/deploy hosts — never a business's real site
+    "netlify.app", "vercel.app", "github.io", "gitlab.io", "surge.sh",
+    "pages.dev", "firebaseapp.com", "webflow.io", "wixsite.com",
 }
 
 # Throwaway inbox providers — an email on one of these is almost never a real

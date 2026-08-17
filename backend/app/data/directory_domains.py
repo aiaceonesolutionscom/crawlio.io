@@ -17,6 +17,19 @@ DIRECTORY_DOMAINS: set[str] = {
     # Pakistan medical/dental directories (common DuckDuckGo results)
     "marham.pk", "oladoc.com", "dentists10.com", "hamariweb.com",
     "digicard.pk", "ekatlang.com", "findandrate.pk", "drmed.pk",
+    "instacare.pk", "bioderma.pk", "mednomics.pk",
+    # Medical-appointment / doctor-profile portals (Tavily/DDG return these
+    # for almost any named clinic — always a listing, never the business site)
+    "whatclinic.com", "tibisahulat.com", "dbohra.com", "healthwire.pk",
+    "lybrate.com", "practo.com", "medimaps.com", "healthgrades.com",
+    "doctoranywhere.com", "idoktor.pk", "wheree.com", "yellowpages.pk",
+    "bizisit.com", "pakdirectory.com.pk", "pk-map.com", "dentin.pk",
+    # Foreign maps/geo clones that search engines surface for named businesses
+    "yandex.ru", "yandex.com", "mapy.com", "geoview.info", "here.com",
+    "placehub.com", "map.google.com", "cnepal.com",
+    # News/media domains — a clinic mentioned in an article is not the clinic
+    "bbc.com", "bbc.co.uk", "dawn.com", "tribune.com.pk", "thenews.com.pk",
+    "dailymail.co.uk", "theguardian.com", "ndtv.com", "timesofindia.com",
     # General classifieds/marketplaces
     "craigslist.org", "mercadolibre.com", "alibaba.com", "aliexpress.com",
     "amazon.com", "ebay.com", "indiamart.com", "tradeindia.com", "sulekha.com",

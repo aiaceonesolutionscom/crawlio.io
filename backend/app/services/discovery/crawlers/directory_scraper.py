@@ -31,6 +31,26 @@ HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
 }
+# A more complete browser header set to retry with after a 403 — some
+# directories (e.g. Cybo) bot-wall the bare UA but accept a full header set.
+_RETRY_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "max-age=0",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 _breaker = CircuitBreaker(name="directories", failure_threshold=3, cooldown_seconds=300.0)
 _limiter = RateLimiter(name="directories", interval=0.7)
 
@@ -63,13 +83,24 @@ def _is_external(href: str, page_host: str) -> bool:
 
 
 async def _fetch(url: str) -> Optional[str]:
-    """GET a directory page. Returns HTML or None; never raises."""
+    """GET a directory page. Returns HTML or None; never raises. On a 403
+    (bot-wall) retries once with a full browser-like header set — a few
+    directories reject the minimal UA but accept the complete one."""
     if _breaker.open:
         return None
     await _limiter.wait()
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
             resp = await client.get(url)
+            if resp.status_code == 403:
+                # Bot-wall: retry with the full browser header set once.
+                await _limiter.wait()
+                async with httpx.AsyncClient(timeout=TIMEOUT, headers=_RETRY_HEADERS, follow_redirects=True) as retry_client:
+                    retry = await retry_client.get(url)
+                    if retry.status_code < 400:
+                        return retry.text
+                logger.info("Directory page %s blocked (403)", url)
+                return None
             if resp.status_code >= 400:
                 logger.info("Directory page %s returned %d", url, resp.status_code)
                 return None

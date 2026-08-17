@@ -11,7 +11,7 @@ from app.services.discovery.scrape_utils import aggregate_contacts, discover_con
 
 logger = logging.getLogger(__name__)
 
-NAV_TIMEOUT_MS = 12_000
+NAV_TIMEOUT_MS = 8_000
 # Real-browser navigation can still be mid-render right after "domcontentloaded"
 # fires (JS-injected footers, cookie-consent-gated content) -- a short settle
 # window catches most of that without waiting for full network idle, which
@@ -21,7 +21,10 @@ SETTLE_MS = 250
 # against a large batch would spike memory and can trip site-side rate limits.
 # 10 keeps batches fast while staying well under a typical proxy's limit.
 MAX_CONCURRENT_PAGES = 10
-MAX_PAGES_PER_SITE = 8
+# Homepage + contact + about is enough to find email/phone/socials on the
+# overwhelming majority of small-business sites — crawling more pages per site
+# is what made batch enrichment take minutes instead of seconds.
+MAX_PAGES_PER_SITE = 3
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -106,9 +109,19 @@ async def extract_contact_details(
                     async with semaphore:
                         results[i] = await _scrape_one(context, url, country_code)
 
-                await asyncio.gather(*(_bounded(i, url) for i, url in enumerate(urls)))
+                # A single stalled site (never-ending stream, hung connection
+                # that ignores timeouts) must not hold the whole batch hostage.
+                # 8 min is generous enough for every site to finish while still
+                # bounding the worst case; per-page NAV_TIMEOUT does the fine
+                # grained control.
+                await asyncio.wait_for(
+                    asyncio.gather(*(_bounded(i, url) for i, url in enumerate(urls))),
+                    timeout=480.0,
+                )
             finally:
                 await browser.close()
+    except asyncio.TimeoutError:
+        logger.warning("Browser scraper batch hit overall timeout (%d urls)", len(urls))
     except Exception as exc:  # e.g. browser binary missing/failed to launch
         logger.warning("Browser scraper batch failed: %s", exc)
         return [{} for _ in urls]

@@ -40,6 +40,14 @@ export interface DiscoverResponseDTO {
   enhanced: boolean;
   daily_limit: number;
   remaining_today: number;
+  search_id: string | null;
+  source_counts?: Record<string, number> | null;
+}
+
+export interface DiscoveryStatusDTO {
+  search_id: string;
+  status: string;
+  items: DiscoveredLeadDTO[];
 }
 
 export function suggestNiches(token: string | null, q?: string) {
@@ -52,6 +60,10 @@ export function discoverLeads(token: string | null, params: DiscoverParams) {
     method: 'POST',
     body: JSON.stringify(params)
   });
+}
+
+export function discoverStatus(token: string | null, searchId: string) {
+  return apiFetch<DiscoveryStatusDTO>(`/api/v1/leads/discover/${encodeURIComponent(searchId)}`, token);
 }
 
 export interface DiscoveryImportSkip {

@@ -1,3 +1,7 @@
+import json
+from typing import Any
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +14,26 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         if self.database_url.startswith("postgresql://"):
             self.database_url = self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:5174"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return ["http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:5174"]
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+            return [v]
+        return ["http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:5174"]
 
     clerk_jwks_url: str = ""
     clerk_issuer: str = ""

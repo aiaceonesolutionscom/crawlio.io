@@ -20,7 +20,7 @@ function createLocalWorkspace(clerkUser: ReturnType<typeof useUser>['user']): Wo
     name: `${clerkUser?.firstName ?? clerkUser?.username ?? 'My'} Workspace`,
     plan: 'free',
     plan_selected: false,
-    lead_quota: 500,
+    lead_quota: 700,
     seat_quota: 1,
     leads_used: 0,
     seats_used: 1,

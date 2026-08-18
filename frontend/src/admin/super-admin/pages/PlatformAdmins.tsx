@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { ShieldCheckIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
@@ -20,8 +20,8 @@ import { ADMIN_PERMISSIONS, ADMIN_ROLES } from '../../../shared/admin/permission
 import { cn } from '../../../shared/utils/cn';
 
 export function PlatformAdmins() {
-  const { getToken } = useAuth();
-  const fetchList = useCallback(() => getToken().then((t) => listPlatformAdmins(t)), [getToken]);
+
+  const fetchList = useCallback(() => Promise.resolve(listPlatformAdmins(getAdminToken())), []);
   const { items, isLoading, refresh } = useAdminResource(fetchList);
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<string>('sub_admin');
@@ -45,7 +45,7 @@ export function PlatformAdmins() {
       return;
     }
     setExpandedAdmin(admin.id);
-    const token = await getToken();
+    const token = getAdminToken();
     await loadPermissions(token, admin.id);
   };
 
@@ -54,7 +54,7 @@ export function PlatformAdmins() {
     if (!newEmail.trim()) return;
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await addPlatformAdmin(token, newEmail.trim(), newRole);
       setNewEmail('');
       await refresh();
@@ -68,7 +68,7 @@ export function PlatformAdmins() {
     setBusyId(admin.id);
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await revokePlatformAdmin(token, admin.id);
       await refresh();
     } catch (err) {
@@ -83,7 +83,7 @@ export function PlatformAdmins() {
     setBusyId(admin.id);
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await updatePlatformAdminRole(token, admin.id, newRoleVal);
       await refresh();
       await loadPermissions(token, admin.id);
@@ -98,7 +98,7 @@ export function PlatformAdmins() {
     setBusyId(`perm:${permission}`);
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       const granted = (permissionsByAdmin[admin.id] ?? []).some((p) => p.permission === permission);
       if (granted) {
         await revokeAdminPermission(token, admin.id, permission);

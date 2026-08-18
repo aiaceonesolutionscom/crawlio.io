@@ -1,10 +1,12 @@
 from typing import Annotated, Any, Callable, Optional
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.permissions import ALL_PERMISSIONS, ROLE_SUPER_ADMIN, is_valid_permission
 from app.core.security import verify_clerk_jwt
 from app.db.models.admin_permission import AdminPermission
@@ -15,18 +17,56 @@ from app.services.admin.platform_admin_service import resolve_or_bootstrap
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _verify_admin_panel_token(token: str) -> dict[str, Any]:
+    """Verify the simple admin panel JWT (username/password based)."""
+    try:
+        claims = jwt.decode(
+            token,
+            settings.admin_jwt_secret,
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub"]},
+        )
+        if claims.get("type") != "admin_panel":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        return claims
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid admin token: {exc}") from exc
+
+
 async def get_current_claims(
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)]
 ) -> dict[str, Any]:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-    return verify_clerk_jwt(credentials.credentials)
+
+    token = credentials.credentials
+
+    # Try admin panel JWT first (simple username/password based)
+    try:
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        if unverified.get("type") == "admin_panel":
+            return _verify_admin_panel_token(token)
+    except jwt.PyJWTError:
+        pass
+
+    # Fall back to Clerk JWT
+    return verify_clerk_jwt(token)
 
 
 async def get_current_admin(
     claims: Annotated[dict[str, Any], Depends(get_current_claims)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PlatformAdmin:
+    # Admin panel token: create a synthetic admin object
+    if claims.get("type") == "admin_panel":
+        return PlatformAdmin(
+            id="admin-panel-0",
+            email=f"{claims.get('sub', 'admin')}@crawlio.admin",
+            role=ROLE_SUPER_ADMIN,
+            is_active=True,
+            clerk_user_id="admin-panel",
+        )
+
     admin = await resolve_or_bootstrap(session, claims)
     if admin is None or not admin.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -68,7 +108,7 @@ def require_permission(permission: str) -> Callable[[PlatformAdmin, AsyncSession
     return _guard
 
 
-def require_role(*roles: str) -> Callable[[PlatformAdmin, AsyncSession], PlatformAdmin]:
+def require_role(*roles: str) -> Callable[[PlatformAdmin], PlatformAdmin]:
     """Dependency factory: restricts to admins whose role is in `roles`."""
 
     async def _guard(

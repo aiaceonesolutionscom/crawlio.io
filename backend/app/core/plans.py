@@ -27,7 +27,7 @@ DAILY_DISCOVERY_IMPORT_LIMITS: dict[str, int] = {
 }
 
 PLAN_LIMITS: dict[str, dict[str, int]] = {
-    "free": {"leads": 500, "seats": 1},
+    "free": {"leads": 700, "seats": 1},
     "pro": {"leads": 5000, "seats": 10},
     "enterprise": {"leads": 1_000_000_000, "seats": 1_000_000_000},
 }

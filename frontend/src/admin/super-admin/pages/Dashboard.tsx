@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis, ResponsiveContainer } from 'recharts';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { StatCard } from '../../../shared/ui/StatCard';
@@ -16,20 +16,20 @@ const TOOLTIP_STYLE = {
 
 export function Dashboard() {
   const { admin } = useAdminSession();
-  const { getToken } = useAuth();
+
   const [data, setData] = useState<AdminDashboardOverviewDTO | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const token = await getToken();
+      const token = getAdminToken();
       const overview = await getAdminDashboardOverview(token);
       if (!cancelled) setData(overview);
     })();
     return () => {
       cancelled = true;
     };
-  }, [getToken]);
+  }, []);
 
   return (
     <div>

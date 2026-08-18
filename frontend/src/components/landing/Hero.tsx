@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
+import { useSystemSettings } from '../lib/api/systemSettings';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowRightIcon, PlayIcon, SparklesIcon } from 'lucide-react';
 import { SignedOut } from '@clerk/clerk-react';
 import { Button, ButtonLink } from '../../shared/ui/Button';
 import { HeroBackdrop } from './HeroBackdrop';
+import { useSiteSettings } from '../../shared/hooks/useSiteSettings';
 
 const fade = {
   hidden: { opacity: 0, y: 16 },
@@ -15,9 +17,13 @@ const fade = {
   })
 };
 
-export function Hero() {
+export function Hero({ ctaText, primaryColor }: { ctaText?: string; primaryColor?: string }) {
   const [email, setEmail] = useState('');
   const navigate = useNavigate();
+  const { settings } = useSiteSettings();
+
+  const effectivePrimaryColor = primaryColor || settings?.primary_color || '#CBFF4D';
+  const effectiveCtaText = ctaText || settings?.cta_text || 'Get Started';
 
   return (
     <section className="relative isolate overflow-hidden border-b border-ink-800">
@@ -67,42 +73,42 @@ export function Hero() {
                 navigate('/signup', { state: { email } });
               }}
               className="mt-9 flex flex-col gap-3 sm:flex-row">
-              
-              <label htmlFor="hero-email" className="sr-only">
-                Work email
-              </label>
-              <input
-                id="hero-email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="h-[52px] w-full rounded-lg border border-ink-700 bg-ink-900/80 px-4 text-[15px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none sm:max-w-[300px]" />
-              
-              <Button type="submit" size="lg">
-                Sign up — it&rsquo;s free
-                <ArrowRightIcon className="h-4 w-4" />
-              </Button>
-            </motion.form>
+                
+                <label htmlFor="hero-email" className="sr-only">
+                  Work email
+                </label>
+                <input
+                  id="hero-email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@company.com"
+                  className="h-[52px] w-full rounded-lg border border-ink-700 bg-ink-900/80 px-4 text-[15px] text-chalk placeholder:text-chalk-faint focus:border-signal focus:outline-none sm:max-w-[300px]" />
+                
+                <Button type="submit" size="lg">
+                  {effectiveCtaText}
+                  <ArrowRightIcon className="h-4 w-4" />
+                </Button>
+              </motion.form>
 
-            <motion.div
-              variants={fade}
-              custom={4}
-              initial="hidden"
-              animate="show"
-              className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-chalk-faint">
-              
-              <span>500 leads/month free</span>
-              <span aria-hidden="true">·</span>
-              <span>No credit card</span>
-              <span aria-hidden="true">·</span>
-              <SignedOut>
-                <ButtonLink to="/login" variant="ghost" size="sm" className="-ml-3.5">
-                  Already have an account? Login
-                </ButtonLink>
-              </SignedOut>
-            </motion.div>
+              <motion.div
+                variants={fade}
+                custom={4}
+                initial="hidden"
+                animate="show"
+                className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-chalk-faint">
+                
+                <span>700 leads/month free</span>
+                <span aria-hidden="true">·</span>
+                <span>No credit card</span>
+                <span aria-hidden="true">·</span>
+                <SignedOut>
+                  <ButtonLink to="/login" variant="ghost" size="sm" className="-ml-3.5">
+                    Already have an account? Login
+                  </ButtonLink>
+                </SignedOut>
+              </motion.div>
           </div>
 
           {/* Demo video slot */}
@@ -130,13 +136,12 @@ export function Hero() {
                 <span className="h-1.5 w-1.5 rounded-full bg-signal" aria-hidden="true" />
                 <span className="text-[12px] text-chalk-dim">Capture → Qualify → Automate → Close</span>
               </div>
+              <p className="mt-3 text-center text-[12px] text-chalk-faint">
+                Placeholder — embed replaces this block.
+              </p>
             </div>
-            <p className="mt-3 text-center text-[12px] text-chalk-faint">
-              Placeholder — embed replaces this block.
-            </p>
           </motion.div>
         </div>
       </div>
     </section>);
-
 }

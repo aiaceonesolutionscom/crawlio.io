@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { EditIcon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { AdminResourceTable, type AdminColumn } from '../../components/AdminResourceTable';
@@ -24,8 +24,8 @@ const FIELDS: AdminField[] = [
 ];
 
 export function PlanConfigs() {
-  const { getToken } = useAuth();
-  const fetchList = useCallback(() => getToken().then((t) => listPlanConfigs(t)), [getToken]);
+
+  const fetchList = useCallback(() => Promise.resolve(listPlanConfigs(getAdminToken())), []);
   const { items, isLoading, refresh } = useAdminResource(fetchList);
   const [editing, setEditing] = useState<PlanConfigDTO | null>(null);
 
@@ -52,7 +52,7 @@ export function PlanConfigs() {
             initialValues={editing as unknown as Record<string, unknown>}
             onCancel={() => setEditing(null)}
             onSubmit={async (values) => {
-              const token = await getToken();
+              const token = getAdminToken();
               await updatePlanConfig(token, editing.plan_key, values);
               setEditing(null);
               await refresh();

@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { EditIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
@@ -15,37 +15,36 @@ import {
 
 const VALUE_TYPE_OPTIONS = [
   { label: 'string', value: 'string' },
-  { label: 'number', value: 'number' },
+  { label: 'color', value: 'color' },
   { label: 'boolean', value: 'boolean' },
   { label: 'json', value: 'json' }
 ];
 
+const SYSTEM_SETTINGS_OPTS = [
+  { key: 'site_name', label: 'Site Name', desc: 'Displayed in header/footer' },
+  { key: 'primary_color', label: 'Primary Color', desc: 'Accent color for buttons/CTAs' },
+  { key: 'secondary_color', label: 'Secondary Color', desc: 'Secondary accent color' },
+  { key: 'hero_video_url', label: 'Hero Video URL', desc: 'Full URL to hero section video' },
+  { key: 'cta_text', label: 'CTA Button Text', desc: 'Text on primary call-to-action button' },
+  { key: 'feedback_text', label: 'Feedback Text', desc: 'Text shown below hero section' }
+];
+
 const CREATE_FIELDS: AdminField[] = [
-  { key: 'key', label: 'Key', type: 'text', helpText: 'e.g. maintenance_mode — unique, used by code to look this up.' },
-  {
-    key: 'value',
-    label: 'Value (JSON)',
-    type: 'json',
-    helpText: 'Quote strings ("hello"), plain numbers (42), true/false, or an object/array.'
-  },
+  { key: 'key', label: 'Key', type: 'select', options: SYSTEM_SETTINGS_OPTS.map(s => ({ label: s.label, value: s.key })) },  
+  { key: 'value', label: 'Value', type: 'text', helpText: 'Enter the value (for color: hex without #, e.g. CBFF4D)' },
   { key: 'value_type', label: 'Value type', type: 'select', options: VALUE_TYPE_OPTIONS },
   { key: 'description', label: 'Description', type: 'textarea' }
 ];
 
 const EDIT_FIELDS: AdminField[] = [
-  {
-    key: 'value',
-    label: 'Value (JSON)',
-    type: 'json',
-    helpText: 'Quote strings ("hello"), plain numbers (42), true/false, or an object/array.'
-  },
+  { key: 'value', label: 'Value', type: 'text', helpText: 'Enter the value (for color: hex without #, e.g. CBFF4D)' },
   { key: 'value_type', label: 'Value type', type: 'select', options: VALUE_TYPE_OPTIONS },
   { key: 'description', label: 'Description', type: 'textarea' }
 ];
 
 export function SystemSettings() {
-  const { getToken } = useAuth();
-  const fetchList = useCallback(() => getToken().then((t) => listSystemSettings(t)), [getToken]);
+
+  const fetchList = useCallback(() => Promise.resolve(listSystemSettings(getAdminToken())), []);
   const { items, isLoading, refresh } = useAdminResource(fetchList);
 
   const [creating, setCreating] = useState(false);
@@ -56,7 +55,7 @@ export function SystemSettings() {
     if (!confirm(`Delete setting "${setting.key}"?`)) return;
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await deleteSystemSetting(token, setting.key);
       await refresh();
     } catch (err) {
@@ -65,8 +64,8 @@ export function SystemSettings() {
   };
 
   const columns: AdminColumn<SystemSettingDTO>[] = [
-    { key: 'key', header: 'Key' },
-    { key: 'value', header: 'Value', render: (row) => <span className="font-mono text-[12px]">{JSON.stringify(row.value)}</span> },
+    { key: 'key', header: 'Setting' },
+    { key: 'value', header: 'Value', render: (row) => <span className="font-mono text-[12px]">{String(row.value)}</span> },
     { key: 'value_type', header: 'Type' },
     { key: 'description', header: 'Description', render: (row) => row.description ?? '—' },
     { key: 'updated_by', header: 'Updated by', render: (row) => row.updated_by ?? '—' }
@@ -98,7 +97,7 @@ export function SystemSettings() {
             onCancel={() => setCreating(false)}
             onSubmit={async (values) => {
               const { key, ...rest } = values as { key: string; value: unknown; value_type: string; description?: string };
-              const token = await getToken();
+              const token = getAdminToken();
               await upsertSystemSetting(token, key, rest);
               setCreating(false);
               await refresh();
@@ -115,7 +114,7 @@ export function SystemSettings() {
             initialValues={editing as unknown as Record<string, unknown>}
             onCancel={() => setEditing(null)}
             onSubmit={async (values) => {
-              const token = await getToken();
+              const token = getAdminToken();
               await upsertSystemSetting(
                 token,
                 editing.key,

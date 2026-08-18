@@ -34,6 +34,15 @@ async def _lifespan(app: FastAPI):
     from app.services.admin import integration_service
 
     await integration_service.hydrate_runtime_from_db()
+    # Seed default system settings if not already present
+    from app.services.admin.system_setting_service import ensure_default_settings
+    from app.db.session import async_session_maker
+
+    async def _seed():
+        async with async_session_maker() as session:
+            await ensure_default_settings(session)
+
+    await _seed()
     yield
 
 
@@ -43,8 +52,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://localhost:8080",
         "https://triconrepublic.com",
         "http://triconrepublic.com",
     ],

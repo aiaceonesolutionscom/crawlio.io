@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { CheckCircle2Icon, KeyRoundIcon, PlayIcon, RefreshCcwIcon, XCircleIcon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
@@ -22,11 +22,11 @@ const SOURCE_BADGE: Record<string, { label: string; className: string }> = {
 };
 
 export function Integrations() {
-  const { getToken } = useAuth();
+
   const { admin } = useAdminSession();
   const canWrite = admin?.permissions.includes('integrations.write') ?? false;
 
-  const fetchList = useCallback(() => getToken().then((t) => listIntegrations(t)), [getToken]);
+  const fetchList = useCallback(() => Promise.resolve(listIntegrations(getAdminToken())), []);
   const { items, isLoading, refresh } = useAdminResource(fetchList);
 
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -40,7 +40,7 @@ export function Integrations() {
     setError(null);
     setBusyKey(item.key);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await setIntegrationOverride(token, item.key, newValue.trim());
       setEditingKey(null);
       setNewValue('');
@@ -57,7 +57,7 @@ export function Integrations() {
     setError(null);
     setBusyKey(item.key);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await clearIntegrationOverride(token, item.key);
       await refresh();
     } catch (err) {
@@ -71,7 +71,7 @@ export function Integrations() {
     setBusyKey(item.key);
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       const result = await testIntegration(token, item.key);
       setTestResults((prev) => ({ ...prev, [item.key]: result }));
     } catch (err) {

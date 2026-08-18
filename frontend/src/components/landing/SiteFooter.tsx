@@ -2,15 +2,17 @@ import React from 'react';
 import { ArrowRightIcon } from 'lucide-react';
 import { ButtonLink } from '../../shared/ui/Button';
 import { Logo } from '../../shared/ui/Logo';
+import { useSystemSettings } from '../../lib/api/systemSettings';
 
 const COLUMNS = [
-{ title: 'Product', links: ['AI Qualification', 'Email Outreach', 'WhatsApp Automation', 'Automation Builder'] },
-{ title: 'Company', links: ['About', 'Careers', 'Blog', 'Contact sales'] },
-{ title: 'Resources', links: ['Docs', 'API reference', 'Changelog', 'Status'] },
-{ title: 'Legal', links: ['Privacy', 'Terms', 'DPA', 'Security'] }];
-
+  { title: 'Product', links: ['AI Qualification', 'Email Outreach', 'WhatsApp Automation', 'Automation Builder'] },
+  { title: 'Company', links: ['About', 'Careers', 'Blog', 'Contact sales'] },
+  { title: 'Resources', links: ['Docs', 'API reference', 'Changelog', 'Status'] },
+  { title: 'Legal', links: ['Privacy', 'Terms', 'DPA', 'Security'] }
+];
 
 export function SiteFooter() {
+  const { footer_text, website_name } = useSystemSettings();
   return (
     <footer className="bg-ink-950">
       <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
@@ -19,7 +21,9 @@ export function SiteFooter() {
             <h2 className="font-display text-[28px] font-semibold tracking-tight text-chalk sm:text-[36px]">
               Put your pipeline on autopilot
             </h2>
-            <p className="mt-3 text-[15px] text-chalk-dim">Free forever on 500 leads a month. No card, no call.</p>
+            <p className="mt-3 text-[15px] text-chalk-dim">
+              {footer_text}
+            </p>
           </div>
           <ButtonLink to="/signup" size="lg">
             Get started
@@ -35,26 +39,26 @@ export function SiteFooter() {
             </p>
           </div>
           {COLUMNS.map((col) =>
-          <nav key={col.title} aria-label={col.title}>
+            <nav key={col.title} aria-label={col.title}>
               <h3 className="font-mono text-[11px] uppercase tracking-[0.16em] text-chalk-faint">{col.title}</h3>
               <ul className="mt-4 space-y-2.5">
                 {col.links.map((link) =>
-              <li key={link}>
+                  <li key={link}>
                     <a href="#product" className="text-[14px] text-chalk-dim transition-colors hover:text-chalk">
                       {link}
                     </a>
                   </li>
-              )}
+                )}
               </ul>
             </nav>
           )}
         </div>
 
         <div className="flex flex-col gap-2 border-t border-ink-850 py-7 text-[12.5px] text-chalk-faint sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} Crawlio.io — all rights reserved.</p>
+          <p>© {new Date().getFullYear()} {website_name} — all rights reserved.</p>
           <p className="font-mono">Built for revenue teams, not for spreadsheets.</p>
         </div>
       </div>
-    </footer>);
-
+    </footer>
+  );
 }

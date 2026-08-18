@@ -6,11 +6,13 @@ import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { SelectPlan } from './pages/SelectPlan';
+import { AdminLogin } from './pages/AdminLogin';
 import { RequireAuth } from './routes/RequireAuth';
 import { RequirePlan } from './routes/RequirePlan';
 import { RequireAdmin } from './routes/RequireAdmin';
 import { PlanRedirect } from './routes/PlanRedirect';
 import { AdminSessionProvider } from './contexts/AdminSessionContext';
+import { SiteSettingsProvider } from './shared/hooks/useSiteSettings';
 
 // Admin is its own lazy chunk, entirely separate from the tier bundles below —
 // a normal customer session never downloads it.
@@ -77,6 +79,7 @@ if (!CLERK_PUBLISHABLE_KEY) {
 export function App() {
   return (
     <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY} signInUrl="/login" signUpUrl="/signup">
+      <SiteSettingsProvider>
       <SessionProvider>
       <BrowserRouter>
         <Suspense fallback={<TierFallback />}>
@@ -146,29 +149,27 @@ export function App() {
               <Route path="settings" element={<DashboardSettings tier="enterprise" />} />
             </Route>
 
+            <Route path="/admin/login" element={<AdminSessionProvider><AdminLogin /></AdminSessionProvider>} />
+
             <Route
               path="/admin"
               element={
-                <RequireAuth>
-                  <AdminSessionProvider>
-                    <RequireAdmin>
-                      <AdminHomeRedirect />
-                    </RequireAdmin>
-                  </AdminSessionProvider>
-                </RequireAuth>
+                <AdminSessionProvider>
+                  <RequireAdmin>
+                    <AdminHomeRedirect />
+                  </RequireAdmin>
+                </AdminSessionProvider>
               }
             />
 
             <Route
               path="/admin/super-admin"
               element={
-                <RequireAuth>
-                  <AdminSessionProvider>
-                    <RequireAdmin>
-                      <SuperAdminLayout />
-                    </RequireAdmin>
-                  </AdminSessionProvider>
-                </RequireAuth>
+                <AdminSessionProvider>
+                  <RequireAdmin>
+                    <SuperAdminLayout />
+                  </RequireAdmin>
+                </AdminSessionProvider>
               }
             >
               <Route index element={<AdminDashboard />} />
@@ -184,13 +185,11 @@ export function App() {
             <Route
               path="/admin/sub-admin"
               element={
-                <RequireAuth>
-                  <AdminSessionProvider>
-                    <RequireAdmin>
-                      <SubAdminLayout />
-                    </RequireAdmin>
-                  </AdminSessionProvider>
-                </RequireAuth>
+                <AdminSessionProvider>
+                  <RequireAdmin>
+                    <SubAdminLayout />
+                  </RequireAdmin>
+                </AdminSessionProvider>
               }
             >
               <Route index element={<SubAdminDashboard />} />
@@ -205,6 +204,7 @@ export function App() {
         </Suspense>
       </BrowserRouter>
       </SessionProvider>
+      </SiteSettingsProvider>
     </ClerkProvider>);
 
 }

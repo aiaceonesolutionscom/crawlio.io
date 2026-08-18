@@ -4,16 +4,19 @@ import { MenuIcon, XIcon } from 'lucide-react';
 import { SignedIn, SignedOut } from '@clerk/clerk-react';
 import { ButtonLink } from '../../shared/ui/Button';
 import { Logo } from '../../shared/ui/Logo';
+import { useSiteSettings } from '../../shared/hooks/useSiteSettings';
 
 const NAV = [
-{ label: 'Product', href: '#product' },
-{ label: 'How it works', href: '#pipeline' },
-{ label: 'Pricing', href: '#pricing' },
-{ label: 'FAQ', href: '#faq' }];
+  { label: 'Product', href: '#product' },
+  { label: 'How it works', href: '#pipeline' },
+  { label: 'Pricing', href: '#pricing' },
+  { label: 'FAQ', href: '#faq' }];
 
 
 export function SiteHeader() {
-  const [open, setOpen] = useState(false);
+  const { settings } = useSiteSettings();
+  const primaryColor = settings?.primary_color || '#CBFF4D';
+  const open = useState(false)[0];
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-ink-800/80 bg-ink-950/80 backdrop-blur-xl">
@@ -70,7 +73,7 @@ export function SiteHeader() {
             href={item.href}
             onClick={() => setOpen(false)}
             className="border-b border-ink-850 py-3 text-[15px] text-chalk-dim">
-            
+                
                 {item.label}
               </a>
           )}
@@ -89,5 +92,4 @@ export function SiteHeader() {
         </div>
       }
     </header>);
-
 }

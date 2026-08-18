@@ -1,51 +1,66 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useAuth as useClerkAuth } from '@clerk/clerk-react';
-import { ApiError } from '../lib/api/client';
-import { getWhoami, type WhoamiDTO } from '../lib/api/admin/whoami';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { apiFetch } from '../lib/api/client';
 
-// Deliberately separate from SessionContext: admin identity (platform_admins)
-// is orthogonal to workspace identity, and hitting /admin must never trigger
-// SessionContext's opportunistic create-workspace flow.
+const ADMIN_TOKEN_KEY = 'crawlio_admin_token';
+
+export interface WhoamiDTO {
+  email: string;
+  role: string;
+  is_super_admin: boolean;
+  permissions: string[];
+}
+
 interface AdminSessionContextValue {
   admin: WhoamiDTO | null;
   isLoaded: boolean;
+  logout: () => void;
 }
 
 const AdminSessionContext = createContext<AdminSessionContextValue | null>(null);
 
+export function getAdminToken(): string | null {
+  return localStorage.getItem(ADMIN_TOKEN_KEY);
+}
+
 export function AdminSessionProvider({ children }: { children: React.ReactNode }) {
-  const { isLoaded: clerkLoaded, isSignedIn, getToken } = useClerkAuth();
   const [admin, setAdmin] = useState<WhoamiDTO | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    if (!clerkLoaded) return;
-    if (!isSignedIn) {
+  const loadAdmin = useCallback(async () => {
+    const token = getAdminToken();
+    if (!token) {
       setAdmin(null);
       setIsLoaded(true);
       return;
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const token = await getToken();
-        const who = await getWhoami(token);
-        if (!cancelled) setAdmin(who);
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 403)) {
-          console.error('Failed to resolve admin session', e);
-        }
-        if (!cancelled) setAdmin(null);
-      } finally {
-        if (!cancelled) setIsLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [clerkLoaded, isSignedIn, getToken]);
+    try {
+      const who = await apiFetch<WhoamiDTO>('/api/v1/admin/whoami', token);
+      setAdmin(who);
+    } catch {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+      setAdmin(null);
+    } finally {
+      setIsLoaded(true);
+    }
+  }, []);
 
-  return <AdminSessionContext.Provider value={{ admin, isLoaded }}>{children}</AdminSessionContext.Provider>;
+  useEffect(() => {
+    loadAdmin();
+  }, [loadAdmin]);
+
+  const logout = useCallback(() => {
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    setAdmin(null);
+    navigate('/admin/login');
+  }, [navigate]);
+
+  return (
+    <AdminSessionContext.Provider value={{ admin, isLoaded, logout }}>
+      {children}
+    </AdminSessionContext.Provider>
+  );
 }
 
 export function useAdminSession() {

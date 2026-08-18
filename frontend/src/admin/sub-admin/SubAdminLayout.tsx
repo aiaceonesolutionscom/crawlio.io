@@ -1,6 +1,5 @@
 import React from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useClerk } from '@clerk/clerk-react';
+import { Link, NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboardIcon,
   LogOutIcon,
@@ -24,22 +23,15 @@ const NAV = [
  * permissions are shown. Nav items are filtered by the current admin's
  * effective permission set; the same permissions are enforced server-side. */
 export function SubAdminLayout() {
-  const { admin } = useAdminSession();
-  const { signOut } = useClerk();
-  const navigate = useNavigate();
+  const { admin, logout } = useAdminSession();
 
   const permissions = new Set(admin?.permissions ?? []);
   const visibleNav = NAV.filter((item) => permissions.has(item.perm));
 
-  const handleLogout = () => {
-    void signOut();
-    navigate('/');
-  };
-
   return (
     <div className="flex min-h-screen w-full bg-ink-950">
-      <aside className="hidden w-[248px] shrink-0 border-r border-ember/30 bg-ink-900 lg:block">
-        <div className="sticky top-0 flex h-screen flex-col">
+      <aside className="fixed top-0 left-0 z-40 h-screen w-[248px] shrink-0 border-r border-ember/30 bg-ink-900 lg:block">
+        <div className="h-screen flex flex-col overflow-y-auto">
           <div className="flex h-16 items-center gap-2 px-5">
             <Link to="/admin/sub-admin" aria-label="Crawlio admin">
               <Logo />
@@ -80,7 +72,7 @@ export function SubAdminLayout() {
             <p className="truncate text-[12.5px] text-chalk-faint">{admin?.email}</p>
             <button
               type="button"
-              onClick={handleLogout}
+              onClick={logout}
               className="mt-2 flex w-full items-center gap-2 rounded-lg border border-ink-700 px-3 py-2 text-left text-[13px] text-chalk-dim hover:text-chalk"
             >
               <LogOutIcon className="h-3.5 w-3.5" />
@@ -90,8 +82,8 @@ export function SubAdminLayout() {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-40 flex h-12 items-center border-b border-ember/30 bg-ember/5 px-4 sm:px-6">
+      <div className="flex min-w-0 flex-1 flex-col ml-[248px]">
+        <header className="sticky top-0 z-40 flex h-12 items-center border-b border-ember/30 bg-ember/5 px-4 sm:px-6 ml-[248px]">
           <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-ember">
             Sub Admin — limited access, only what your Super Admin granted
           </span>

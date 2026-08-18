@@ -102,5 +102,10 @@ class Settings(BaseSettings):
     pro_daily_whatsapp_limit: int = 200
     enterprise_daily_whatsapp_limit: int = 1000
 
+    admin_username: str = "admin"
+    admin_password: str = "crawlio2026"
+    admin_jwt_secret: str = "crawlio-admin-jwt-secret-change-in-production"
+    admin_jwt_expire_hours: int = 24
+
 
 settings = Settings()

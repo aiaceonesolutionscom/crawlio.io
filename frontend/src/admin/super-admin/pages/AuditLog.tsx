@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { AdminResourceTable, type AdminColumn } from '../../components/AdminResourceTable';
 import { useAdminResource } from '../../lib/useAdminResource';
@@ -33,19 +33,19 @@ function DiffCell({ before, after }: { before: Record<string, unknown> | null; a
 }
 
 export function AuditLog() {
-  const { getToken } = useAuth();
+
   const [actionFilter, setActionFilter] = useState('');
   const [targetTypeFilter, setTargetTypeFilter] = useState('');
 
   const fetchList = useCallback(
     () =>
-      getToken().then((t) =>
-        listAuditLog(t, {
+      Promise.resolve(
+        listAuditLog(getAdminToken(), {
           action: actionFilter || undefined,
           targetType: targetTypeFilter || undefined
         })
       ),
-    [getToken, actionFilter, targetTypeFilter]
+    [actionFilter, targetTypeFilter]
   );
   const { items, isLoading, refresh } = useAdminResource(fetchList);
 

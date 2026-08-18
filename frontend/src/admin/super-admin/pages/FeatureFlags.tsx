@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { EditIcon, SlidersHorizontalIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { Button } from '../../../shared/ui/Button';
@@ -30,8 +30,8 @@ const EDIT_FIELDS: AdminField[] = [
 ];
 
 export function FeatureFlags() {
-  const { getToken } = useAuth();
-  const fetchList = useCallback(() => getToken().then((t) => listFeatureFlags(t)), [getToken]);
+
+  const fetchList = useCallback(() => Promise.resolve(listFeatureFlags(getAdminToken())), []);
   const { items, isLoading, refresh } = useAdminResource(fetchList);
 
   const [creating, setCreating] = useState(false);
@@ -48,12 +48,12 @@ export function FeatureFlags() {
     if (!selectedFlag) return;
     setOverridesLoading(true);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       setOverrides(await listOverrides(token, selectedFlag.id));
     } finally {
       setOverridesLoading(false);
     }
-  }, [selectedFlag, getToken]);
+  }, [selectedFlag]);
 
   useEffect(() => {
     void loadOverrides();
@@ -63,7 +63,7 @@ export function FeatureFlags() {
     if (!confirm(`Delete flag "${flag.key}"? This also removes all its workspace overrides.`)) return;
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await deleteFeatureFlag(token, flag.id);
       if (selectedFlag?.id === flag.id) setSelectedFlag(null);
       await refresh();
@@ -77,7 +77,7 @@ export function FeatureFlags() {
     if (!selectedFlag || !newOverrideWorkspaceId.trim()) return;
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await setOverride(token, selectedFlag.id, newOverrideWorkspaceId.trim(), newOverrideEnabled);
       setNewOverrideWorkspaceId('');
       await loadOverrides();
@@ -90,7 +90,7 @@ export function FeatureFlags() {
     if (!selectedFlag) return;
     setError(null);
     try {
-      const token = await getToken();
+      const token = getAdminToken();
       await clearOverride(token, selectedFlag.id, workspaceId);
       await loadOverrides();
     } catch (err) {
@@ -133,7 +133,7 @@ export function FeatureFlags() {
             initialValues={{ default_enabled: false }}
             onCancel={() => setCreating(false)}
             onSubmit={async (values) => {
-              const token = await getToken();
+              const token = getAdminToken();
               await createFeatureFlag(token, values as { key: string; description?: string; default_enabled?: boolean });
               setCreating(false);
               await refresh();
@@ -150,7 +150,7 @@ export function FeatureFlags() {
             initialValues={editing as unknown as Record<string, unknown>}
             onCancel={() => setEditing(null)}
             onSubmit={async (values) => {
-              const token = await getToken();
+              const token = getAdminToken();
               await updateFeatureFlag(token, editing.id, values as { description?: string; default_enabled?: boolean });
               setEditing(null);
               await refresh();

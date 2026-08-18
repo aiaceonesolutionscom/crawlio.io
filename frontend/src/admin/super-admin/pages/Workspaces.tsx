@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useAuth } from '@clerk/clerk-react';
+import { getAdminToken } from '../../../contexts/AdminSessionContext';
 import { EditIcon, Trash2Icon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { AdminResourceTable, type AdminColumn } from '../../components/AdminResourceTable';
@@ -30,11 +30,11 @@ const FIELDS: AdminField[] = [
 ];
 
 export function Workspaces() {
-  const { getToken } = useAuth();
+
   const { admin } = useAdminSession();
   const canWrite = admin?.permissions.includes('workspaces.write') ?? false;
   const [search, setSearch] = useState('');
-  const fetchList = useCallback(() => getToken().then((t) => listWorkspaces(t, search || undefined)), [getToken, search]);
+  const fetchList = useCallback(() => Promise.resolve(listWorkspaces(getAdminToken(), search || undefined)), [search]);
   const { items, isLoading, refresh } = useAdminResource(fetchList);
   const [editing, setEditing] = useState<AdminWorkspaceDTO | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -67,7 +67,7 @@ export function Workspaces() {
   const handleDelete = async (workspace: AdminWorkspaceDTO) => {
     if (!confirm(`Delete workspace "${workspace.name}" and ALL its data? This cannot be undone.`)) return;
     setBusyId(workspace.id);
-    const token = await getToken();
+    const token = getAdminToken();
     await deleteWorkspace(token, workspace.id);
     await refresh();
     setBusyId(null);
@@ -96,7 +96,7 @@ export function Workspaces() {
             initialValues={editing as unknown as Record<string, unknown>}
             onCancel={() => setEditing(null)}
             onSubmit={async (values) => {
-              const token = await getToken();
+              const token = getAdminToken();
               await updateWorkspace(token, editing.id, values);
               setEditing(null);
               await refresh();

@@ -11,10 +11,12 @@ PLAN_CAPABILITIES: dict[str, set[str]] = {
 }
 
 # Lead Discovery result cap per search, by plan.
+# Hard-capped at 50 for every plan: the scraper is fast enough to fill this
+# reliably in a single request, and higher caps only multiply scrape time.
 DISCOVERY_LIMITS: dict[str, int] = {
     "free": 50,
-    "pro": 200,
-    "enterprise": 500,
+    "pro": 50,
+    "enterprise": 50,
 }
 
 # Max leads that can be *added* (imported) via Lead Discovery per rolling calendar

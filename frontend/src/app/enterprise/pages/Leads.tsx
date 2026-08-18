@@ -7,7 +7,7 @@ export function Leads() {
       searchEnabled
       whatsappEnabled
       bulkExportEnabled
-      discoveryCap={200}
+      discoveryCap={50}
       discoveryEnhanced
       aiFilterEnabled />
   );

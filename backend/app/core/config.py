@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # fingerprint. Higher = closer to the requested lead count, at the cost of
     # more requests per search; for volume beyond this, use proxy_url rather
     # than raising it unbounded.
-    google_maps_search_limit: int = 20
+    google_maps_search_limit: int = 50
     # Optional proxy for the crawlers (anti-bot), e.g. "http://user:pass@host:port".
     proxy_url: str = ""
     # Rotating residential proxy pool (anti-bot for Google Maps). Comma-separated
@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     # contributes name + website candidates only, never guessed contact info —
     # see web_search_service.py for why that's safe.
     tavily_api_key: str = ""
-    tavily_enabled: bool = False
-    tavily_max_results: int = 10
+    tavily_enabled: bool = True
+    tavily_max_results: int = 20
 
     # Shared, global cache of validated discovery results per niche+city+country
     # (not workspace-scoped) — repeat searches across every workspace reuse the

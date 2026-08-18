@@ -95,6 +95,20 @@ class TestValidateLead:
         assert validate_lead({"name": "X"}) is None
         assert validate_lead({"name": "X", "phone": "03001234567", "email": "a@bad"}) is not None
 
+    def test_accepts_lead_with_address_and_coords(self, monkeypatch):
+        monkeypatch.setattr(lead_validator, "_has_mx", lambda d: True)
+        lead = validate_lead(
+            {"name": "Advanced Dental Care", "address": "Shahnawaz Bhutto Rd, Karachi", "lat": 24.87, "lon": 67.03},
+            "PK",
+        )
+        assert lead is not None
+        assert lead["name"] == "Advanced Dental Care"
+
+    def test_still_drops_name_without_address_or_coords(self, monkeypatch):
+        monkeypatch.setattr(lead_validator, "_has_mx", lambda d: True)
+        assert validate_lead({"name": "Bare Name", "address": "Karachi"}, "PK") is None
+        assert validate_lead({"name": "Bare Name", "lat": 24.87, "lon": 67.03}, "PK") is None
+
     def test_cleans_phone_and_email(self, monkeypatch):
         monkeypatch.setattr(lead_validator, "_has_mx", lambda d: True)
         lead = validate_lead(

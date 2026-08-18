@@ -173,7 +173,7 @@ async def test_tavily_tops_up_when_structured_sources_fall_short(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tavily_never_called_when_disabled_by_default(monkeypatch):
+async def test_tavily_called_when_short_and_enabled(monkeypatch):
     async def fake_empty(*args, **kwargs):
         return []
 
@@ -197,11 +197,12 @@ async def test_tavily_never_called_when_disabled_by_default(monkeypatch):
     monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.web_search_service, "find_extra_businesses", fake_tavily)
-    # tavily_enabled defaults to False — not touched here.
+    # tavily_enabled now defaults to True — a short result should fire it.
+    monkeypatch.setattr(discovery_service.settings, "tavily_enabled", True)
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "Islamabad", "Pakistan", country_code="PK", limit=20)
     assert len(leads) == 1
-    assert called is False
+    assert called is True
 
 
 @pytest.mark.asyncio

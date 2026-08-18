@@ -1,4 +1,4 @@
-"""Lead validation — the quality gate that guarantees "real data".
+"""Lead validation �?" the quality gate that guarantees "real data".
 
 Every lead that survives to the UI must carry a *real* contact channel. This
 module:
@@ -62,7 +62,7 @@ def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
             return "+92" + digits[-10:]
         if _PK_LANDLINE_RE.match(candidate):
             return "+92" + digits[-10:]
-        # Not obviously Pakistani — reject rather than guess wrong.
+        # Not obviously Pakistani �?" reject rather than guess wrong.
         return None
     # Other countries: normalize using the worldwide calling-code map so a US/
     # UK/Gulf/Indian number comes back in canonical E.164 (+1...+44...+971...
@@ -73,7 +73,7 @@ def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
     e164 = normalize_e164(candidate, cc)
     if e164:
         return e164
-    # Unknown/edge-country code (or a number we can't map confidently) — keep a
+    # Unknown/edge-country code (or a number we can't map confidently) �?" keep a
     # plain national number so non-PK searches still show phones.
     if 9 <= len(digits) <= 12:
         return digits
@@ -157,9 +157,36 @@ def validate_emails(item: dict) -> None:
 
 def validate_lead(item: dict, country_code: str = "PK") -> Optional[dict]:
     """Clean a lead's phone/email and return it only if a real contact channel
-    survives. Returns None when the lead has nothing real left."""
+    survives. Returns None when the lead has nothing real left.
+
+    Accepted contact channels:
+    - phone (normalized to E.164 when plausible),
+    - email (MX-verified when validation is enabled),
+    - website,
+    - name + street address + lat/lon (a real, geocoded business from OSM/BizData
+      that simply publishes no phone/email/website — visitable, not invented).
+    A bare name with no channel is still dropped."""
     normalize_phones(item, country_code)
     validate_emails(item)
-    if not (item.get("phone") or item.get("email") or item.get("website")):
-        return None
-    return item
+
+    has_phone = bool(item.get("phone"))
+    has_email = bool(item.get("email"))
+    has_website = bool(item.get("website"))
+
+    if has_phone or has_email or has_website:
+        return item
+
+    # OSM-derived sources (BizData, Overpass) sometimes carry a real street
+    # address + coordinates but no phone/email/website. They're real, visitable
+    # businesses — accept them with a lower completeness score rather than
+    # dropping them, so thin niches still return what the free web actually has.
+    name = (item.get("name") or "").strip()
+    address = (item.get("address") or "").strip()
+    lat, lon = item.get("lat"), item.get("lon")
+    has_coords = isinstance(lat, (int, float)) and isinstance(lon, (int, float)) \
+        and -90 <= lat <= 90 and -180 <= lon <= 180
+    if name and address and has_coords:
+        return item
+
+    # No real contact channel at all - drop the lead
+    return None

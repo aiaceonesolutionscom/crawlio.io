@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.services import browser_scraper_service, geocoding_service, website_scraper_service
+from app.services.crawlers import maps_crawler
 from app.services.crawlers.lead_validator import validate_email
 from app.services.lead_quality import data_quality
 from app.services.scrape_utils import normalize_website_url
@@ -32,12 +33,32 @@ logger = logging.getLogger(__name__)
 
 _FILLABLE = ("email", "phone", "website", "address", "hours", "description", "social_links")
 
+# Google Maps name-lookups are one Playwright crawl each; cap how many run in
+# a single inline batch so enrichment stays bounded when the worker is down.
+# The background worker enriches item-by-item and is not bound by this cap.
+MAPS_LOOKUP_CAP = 10
+
 
 def _fill_gaps(result: dict, source: dict) -> None:
     for key in _FILLABLE:
         value = source.get(key)
         if value and not result.get(key):
             result[key] = value
+
+
+async def _maps_lookup(item: dict, city: str, country: str) -> Optional[dict]:
+    """Look up a lead's real GBP panel data on Google Maps by its name, filling
+    the phone/website/address/hours the free structured sources (OSM,
+    directories) don't carry. Returns the raw Maps record or None; never
+    raises. Only used when the caller opts in via use_google_maps."""
+    name = (item.get("name") or "").strip()
+    if not name:
+        return None
+    try:
+        return await maps_crawler.lookup_business_by_name(name, city, country)
+    except Exception as exc:
+        logger.warning("Google Maps enrichment lookup failed for %s: %s", name, exc)
+        return None
 
 
 async def _scrape_website(website: str, use_browser: bool, country_code: Optional[str]) -> dict:
@@ -127,6 +148,16 @@ async def enrich_item(
             _fill_gaps(result, scraped)
             sources.append("website")
 
+    # Optional Google Maps name-lookup: the business's own GBP panel often has
+    # the phone/address/hours that the free structured sources don't publish.
+    # Only consulted when the caller opts in — it is the slowest enrichment
+    # step (a Playwright lookup per lead), so it must stay opt-in.
+    if use_google_maps and not (result.get("phone") or result.get("website")):
+        maps_record = await _maps_lookup(result, city, country)
+        if maps_record:
+            _fill_gaps(result, maps_record)
+            sources.append("google_maps")
+
     return await _finalize(result, scraped, sources, city, country)
 
 
@@ -205,6 +236,25 @@ async def enrich_items_batch(
                 if scraped:
                     scraped_by_index[i] = scraped
                     sources_by_index[i].append("website")
+
+    # Optional Google Maps name-lookup pass: for leads that still have no
+    # contact channel (name-only OSM/directory results), pull their real GBP
+    # panel data by name. Sequential, so it shares a fresh browser per lead —
+    # bounded by MAPS_LOOKUP_CAP to keep the batch's latency sane.
+    if use_google_maps:
+        looked_up = 0
+        for i, result in enumerate(results):
+            if looked_up >= MAPS_LOOKUP_CAP:
+                break
+            if not result.get("name"):
+                continue
+            if result.get("phone") or result.get("website"):
+                continue
+            maps_record = await _maps_lookup(result, city, country)
+            looked_up += 1
+            if maps_record:
+                _fill_gaps(result, maps_record)
+                sources_by_index[i].append("google_maps")
 
     for i, result in enumerate(results):
         name = result.get("name") or ""

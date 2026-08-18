@@ -51,7 +51,6 @@ class CircuitBreaker:
                 "%s failed %d times in a row, circuit-breaking for %.0fs",
                 self.name, self._consecutive_failures, self.cooldown_seconds,
             )
-
     def record_success(self) -> None:
         self._consecutive_failures = 0
 
@@ -145,8 +144,8 @@ class ProxyRotator:
         self._suspended_until.clear()
 
 
-# Block/rate-limit statuses that HTTP crawlers must treat as "back off",
-# distinct from a plain 404 (page genuinely missing).
+# Block/rate-limit statuses that HTTP crawlers must treat as "back off", distinct
+# from a plain 404 (page genuinely missing).
 class FetchOutcome:
     """Result of an HTTP fetch with enough context for the caller to decide
     whether to rotate proxies / trip circuit breakers / report zero results."""
@@ -235,7 +234,7 @@ async def fetch_text(
 
 class RobotsTxt:
     """Tiny robots.txt checker with per-host caching so the plain-HTTP crawlers
-    (directories, search pages) don't hammer robots.txt on every fetch. Treats
+    (directory, search pages) don't hammer robots.txt on every fetch. Treats
     any failure to fetch robots.txt as "allowed" so a flaky host never silently
     zeroes a whole crawl. Only `Disallow` rules are honored; wildcard prefixes
     are matched the same way real crawlers do (longest prefix wins)."""
@@ -297,7 +296,7 @@ class SourceTracker:
     Crawlers report `record_success(source)` / `record_failure(source)`; this
     keeps a bounded rolling window of outcomes (newest-first) so the health and
     dashboard endpoints can show which sources are healthy and which are getting
-    blocked or erroring right now — without unbounded memory growth.
+    blocked or erroring right now -- without unbounded memory growth.
 
     Thread-safety isn't needed: all crawler calls run inside one asyncio loop.
     """
@@ -354,7 +353,7 @@ class SourceTracker:
 
     def unhealthy(self, min_rate: float = 0.3, min_samples: int = 5) -> list[str]:
         """Sources whose recent success rate is below `min_rate` over at least
-        `min_samples` observed calls — candidates for the degraded flag."""
+        `min_samples` observed calls -- candidates for the degraded flag."""
         out: list[str] = []
         for source, window in self._outcomes.items():
             if len(window) < min_samples:

@@ -492,3 +492,131 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
     _proxy_rotator.mark_success(proxy)
     logger.info("Google Maps crawl for %s in %s returned %d records", niche, city, len(records))
     return records
+
+
+# Token-based name similarity used to pick the right place panel when we look
+# a business up by name: the feed often contains nearby look-alike listings, so
+# we only trust a match whose name shares enough words with the query.
+def _name_tokens(name: str) -> set[str]:
+    return {t.lower() for t in re.findall(r"[a-z0-9]+", name or "") if len(t) > 1}
+
+
+def _name_similarity(query: str, candidate: str) -> float:
+    q = _name_tokens(query)
+    c = _name_tokens(candidate)
+    if not q or not c:
+        return 0.0
+    return len(q & c) / max(len(q), len(c))
+
+
+async def lookup_business_by_name(name: str, city: str, country: str) -> Optional[dict]:
+    """Targeted Google Maps lookup for ONE business by its exact name (the
+    "GBP panel" path used during enrichment, when a lead from OSM/directories
+    has a name+address but no phone/website).
+
+    Returns the matching place record (phone/website/address/hours/rating) or
+    None on failure/block/no-confident-match. Never raises.
+
+    Shares the search_businesses crawl machinery (feed -> panel scrape) but
+    reuses the business NAME as the query instead of a niche keyword, so a
+    business that Google's ranking feed buried for a generic niche search is
+    still found when asked for directly."""
+    if _breaker.open:
+        logger.warning("Google Maps lookup skipped — circuit open")
+        return None
+    if not name:
+        return None
+    name = name.strip()
+    url = _query_url(name, city, country)
+
+    proxy = await _proxy_rotator.get(sticky_key=f"maps-lookup:{name}:{city}")
+    user_agent = _pick_user_agent()
+    locale = _pick_locale()
+
+    try:
+        async with async_playwright() as p:
+            kwargs = {"headless": settings.google_maps_headless}
+            if proxy:
+                kwargs["proxy"] = {"server": proxy}
+            try:
+                browser = await p.chromium.launch(**kwargs)
+            except PlaywrightError as exc:
+                logger.warning("Google Maps lookup could not launch chromium: %s (%s)", exc, _CHROMIUM_HINT)
+                return None
+            try:
+                context = await browser.new_context(
+                    user_agent=user_agent,
+                    locale=locale,
+                    viewport={"width": 1280, "height": 900},
+                    timezone_id=_pick_timezone(locale),
+                )
+                try:
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
+                            else route.continue_()
+                        ),
+                    )
+                except (PlaywrightError, AttributeError):
+                    pass
+                try:
+                    page = await context.new_page()
+                    try:
+                        await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+                        await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
+                    except PlaywrightError as exc:
+                        try:
+                            html_sample = await page.content()
+                        except PlaywrightError:
+                            html_sample = ""
+                        if _looks_blocked(page.url, html_sample):
+                            logger.warning("Google Maps lookup appears blocked for %s (proxy=%s): %s", name, proxy, exc)
+                            _breaker.record_failure()
+                            source_tracker.record_failure("google_maps")
+                            _proxy_rotator.mark_failure(proxy)
+                            return None
+                        logger.warning("Google Maps lookup feed not found for %s: %s", name, exc)
+                        return None
+
+                    feed = await _collect_feed_links(page, limit=5)
+                    if not feed:
+                        return None
+
+                    # Pick the candidate whose name best matches the query; only
+                    # trust it when the overlap is strong enough to be the same
+                    # business rather than a look-alike listing.
+                    best_card = max(feed, key=lambda c: _name_similarity(name, c.get("name") or ""))
+                    if _name_similarity(name, best_card.get("name") or "") < 0.4:
+                        logger.info(
+                            "Google Maps lookup: no confident name match for %r (best: %r)",
+                            name, best_card.get("name") or "",
+                        )
+                        return None
+
+                    record = await _scrape_place(context, best_card)
+                    if record.get("name"):
+                        record.setdefault("source", "google_maps")
+                        _breaker.record_success()
+                        source_tracker.record_success("google_maps")
+                        _proxy_rotator.mark_success(proxy)
+                        logger.info("Google Maps lookup for %r returned a match", name)
+                        return record
+                    return None
+                finally:
+                    await page.close()
+            finally:
+                await browser.close()
+    except PlaywrightError as exc:
+        logger.warning("Google Maps lookup failed for %s: %s", name, exc)
+        _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
+        return None
+    except Exception as exc:
+        logger.warning("Google Maps lookup failed unexpectedly for %s: %s", name, exc)
+        _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
+        return None
+
+    return None

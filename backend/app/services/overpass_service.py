@@ -32,6 +32,7 @@ OVERPASS_MIRRORS = [
     "https://overpass.osm.ch/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
 
@@ -168,31 +169,37 @@ async def _run_overpass_query(query: str) -> list[dict]:
     """Fires all mirrors at once and returns as soon as one comes back with
     actual results, instead of trying them one at a time — a sequential
     fallback across 5 mirrors could take 5x the per-mirror timeout before
-    giving up, far too slow for an interactive search. Never raises: on total
-    mirror failure, logs and returns an empty list so this source can never
-    block or fail the overall discovery search."""
+    giving up, far too slow for an interactive search. Retried once after a
+    short pause when every mirror fails or returns nothing, because the public
+    mirrors are flaky under load (504/429) and a single instant can collapse
+    an entire search to directory-only results. Never raises: on total mirror
+    failure, logs and returns an empty list so this source can never block or
+    fail the overall discovery search."""
     empty_result: Optional[list[dict]] = None
     async with httpx.AsyncClient(timeout=OVERPASS_HTTP_TIMEOUT, headers=OVERPASS_HEADERS) as client:
-        tasks = {
-            asyncio.create_task(_query_one_mirror(client, mirror, query)): mirror
-            for mirror in OVERPASS_MIRRORS
-        }
-        pending = set(tasks)
-        try:
-            while pending:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    try:
-                        result = task.result()
-                    except (httpx.HTTPError, ValueError) as exc:
-                        logger.warning("Overpass mirror %s failed: %s", tasks[task], exc)
-                        continue
-                    if result:
-                        return result
-                    empty_result = result
-        finally:
-            for task in pending:
-                task.cancel()
+        for attempt in range(2):
+            tasks = {
+                asyncio.create_task(_query_one_mirror(client, mirror, query)): mirror
+                for mirror in OVERPASS_MIRRORS
+            }
+            pending = set(tasks)
+            try:
+                while pending:
+                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        try:
+                            result = task.result()
+                        except (httpx.HTTPError, ValueError) as exc:
+                            logger.warning("Overpass mirror %s failed: %s", tasks[task], exc)
+                            continue
+                        if result:
+                            return result
+                        empty_result = result
+            finally:
+                for task in pending:
+                    task.cancel()
+            if attempt == 0:
+                await asyncio.sleep(1.0)
 
     return empty_result if empty_result is not None else []
 
@@ -221,7 +228,7 @@ async def discover_businesses(niche: str, city: str, country: str, limit: int = 
     # Standard radii: 15km -> 50km for a normal search. When wider_radius is
     # requested (retry pass), push out to 100km -> 250km to catch businesses
     # on the outskirts that the default tiers miss.
-    radii = [100_000, 250_000] if wider_radius else [DEFAULT_RADIUS_METERS, 50_000]
+    radii = [100_000, 250_000, 400_000] if wider_radius else [DEFAULT_RADIUS_METERS, 50_000]
     collected: list[dict] = []
     seen_keys: set[tuple] = set()
 

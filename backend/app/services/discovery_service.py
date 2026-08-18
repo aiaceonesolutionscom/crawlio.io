@@ -26,6 +26,7 @@ produced — never junk and never fabricated data.
 """
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from app.core.config import settings
@@ -66,7 +67,27 @@ OVERSAMPLE_FACTOR = 3
 PER_SOURCE_FETCH_CAP = 150
 # Timeout per individual source so one slow/straggler source doesn't stall
 # the whole request (e.g. a Google Maps hiccup blocking for 30s+).
-_SOURCE_TIMEOUT = 25.0
+_SOURCE_TIMEOUT = 12.0
+
+# Google Maps is the primary, richest source (phone + website + rating) but is
+# also the slowest: a Playwright crawl needs ~40s+ for a useful panel set. It
+# gets its own dedicated budget so the 12s fast-source guard doesn't cancel it
+# mid-crawl (which previously starved every search to ~13-19 leads).
+_MAPS_TIMEOUT = 35.0
+
+# OSM/Overpass races several mirrors against a free shared API; a single query
+# routinely takes ~15-25s to come back (mirrors 504/429 under load). It is the
+# most reliable volume source, so it also gets a dedicated budget instead of the
+# 12s fast-source guard that kept cancelling it and collapsing searches to
+# directory+bizdata only (~18 leads).
+_OSM_TIMEOUT = 28.0
+
+# Hard wall-clock deadline for the entire discovery request. The fallback
+# ladder (synonyms -> nearby cities -> country-wide top cities) is valuable on
+# thin markets but must never turn a lead search into a multi-minute wait, so
+# every fallback step checks the budget and stops once it's spent — the search
+# returns whatever real, validated leads it has instead of grinding on.
+_DISCOVERY_DEADLINE = 110.0
 
 
 class DiscoveryUnavailableError(Exception):
@@ -106,7 +127,8 @@ def _validate_all(items: list[dict], niche: str, country_code: str, limit: int) 
 
 
 async def _scrape_city_sources(
-    niche: str, city: str, country: str, limit: int, use_maps: bool = True
+    niche: str, city: str, country: str, limit: int, use_maps: bool = True,
+    deadline: Optional[float] = None,
 ) -> tuple[list[dict], dict[str, int], bool]:
     """Run the structured crawlers for one city. Returns (raw_candidates,
     per_source_counts, engaged) — engaged is True when at least one source
@@ -131,25 +153,25 @@ async def _scrape_city_sources(
     fetch_limit = min(max(limit, 1) * OVERSAMPLE_FACTOR, PER_SOURCE_FETCH_CAP)
 
     tasks = [
-        _timed_source("osm", overpass_service.discover_businesses(niche, city, country, fetch_limit)),
-        _timed_source("directory", directory_scraper.search_businesses(niche, city, country, fetch_limit)),
-        _timed_source("bing", bing_maps_crawler.search_businesses(niche, city, country, fetch_limit)),
-        _timed_source("bizdata", bizdata_crawler.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("osm", overpass_service.discover_businesses(niche, city, country, fetch_limit), deadline, timeout=_OSM_TIMEOUT),
+        _timed_source("directory", directory_scraper.search_businesses(niche, city, country, fetch_limit), deadline),
+        _timed_source("bing", bing_maps_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
+        _timed_source("bizdata", bizdata_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
     ]
     names = ["osm", "directory", "bing", "bizdata"]
 
     if use_maps:
-        tasks.insert(0, _timed_source("maps", maps_crawler.search_businesses(niche, city, country, fetch_limit)))
+        tasks.insert(0, _timed_source("maps", maps_crawler.search_businesses(niche, city, country, fetch_limit), deadline, timeout=_MAPS_TIMEOUT))
         names.insert(0, "maps")
 
     # New providers: Wikidata, Wikipedia, CertTransparency, DNS.
     # These are added after the core three; they are lighter weight and
     # serve as supplementary sources when the primary ones are thin.
     tasks.extend([
-        _timed_source("wikidata", wikidata_crawler.search_businesses(niche, city, country, fetch_limit)),
-        _timed_source("wikipedia", wikipedia_crawler.search_businesses(niche, city, country, fetch_limit)),
-        _timed_source("certtransparency", certtransparency_crawler.search_businesses(niche, city, country, fetch_limit)),
-        _timed_source("dns", dns_crawler.search_businesses(niche, city, country, fetch_limit)),
+        _timed_source("wikidata", wikidata_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
+        _timed_source("wikipedia", wikipedia_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
+        _timed_source("certtransparency", certtransparency_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
+        _timed_source("dns", dns_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
     ])
     names.extend(["wikidata", "wikipedia", "certtransparency", "dns"])
 
@@ -174,16 +196,23 @@ async def _scrape_city_sources(
     return candidates, source_counts, engaged
 
 
-async def _timed_source(name: str, coro):
+async def _timed_source(name: str, coro, deadline: Optional[float] = None, timeout: Optional[float] = None):
     """Run a discovered-source coroutine with a timeout guard so one slow
     source can't stall the whole request. Records the outcome on the shared
-    source_tracker so the health/dashboard endpoints see per-source health."""
+    source_tracker so the health/dashboard endpoints see per-source health.
+
+    `timeout` overrides the default per-source timeout for sources that need
+    more time than the fast-source guard (e.g. Google Maps' Playwright crawl);
+    it is still bounded by the remaining global `deadline` if one is set."""
+    guard = timeout if timeout is not None else _SOURCE_TIMEOUT
+    if deadline is not None:
+        guard = min(guard, max(deadline - time.monotonic(), 0.1))
     try:
-        result = await asyncio.wait_for(coro, timeout=_SOURCE_TIMEOUT)
+        result = await asyncio.wait_for(coro, timeout=guard)
         source_tracker.record_success(name)
         return result
     except asyncio.TimeoutError:
-        logger.warning("Discovery source %s timed out after %.1fs", name, _SOURCE_TIMEOUT)
+        logger.warning("Discovery source %s timed out after %.1fs", name, guard)
         source_tracker.record_failure(name)
         return []
     except Exception as exc:
@@ -206,7 +235,15 @@ async def discover_businesses(
     if limit < 1:
         return []
 
-    candidates, source_counts, engaged = await _scrape_city_sources(niche, city, country, limit)
+    deadline = time.monotonic() + _DISCOVERY_DEADLINE
+
+    def _over_budget() -> bool:
+        # A fallback pass costs up to one full source round (~_SOURCE_TIMEOUT).
+        # Require room for that pass on top of the remaining time, otherwise
+        # every fallback stage would start right at the deadline and grind on.
+        return time.monotonic() >= deadline - _SOURCE_TIMEOUT
+
+    candidates, source_counts, engaged = await _scrape_city_sources(niche, city, country, limit, deadline=deadline)
     if not engaged:
         raise DiscoveryUnavailableError(
             "All lead sources are temporarily unavailable. Please try again in a moment."
@@ -230,13 +267,13 @@ async def discover_businesses(
     # escalated search radius before falling back to nearby cities. This
     # catches businesses just outside the default Overpass bbox but still
     # legitimately in the requested city, and it's cheap (no Playwright).
-    if len(cleaned) < limit:
+    if len(cleaned) < limit and not _over_budget():
         remaining = limit - len(cleaned)
         extra_budget = min(remaining * OVERSAMPLE_FACTOR, PER_SOURCE_FETCH_CAP)
         try:
             overpass_extra = await asyncio.wait_for(
                 overpass_service.discover_businesses(niche, city, country, extra_budget, wider_radius=True),
-                timeout=_SOURCE_TIMEOUT,
+                timeout=max(deadline - time.monotonic(), 0.1),
             )
         except (asyncio.TimeoutError, Exception) as exc:
             logger.info("Overpass wider-radius retry for %s in %s skipped: %s", niche, city, exc)
@@ -259,14 +296,14 @@ async def discover_businesses(
     # to. Directories/aggregators index different phrases; a "dental clinic"
     # query surfaces listings "dentist" misses, and vice versa. Real structured
     # data, same city, still cheaper than a nearby city (no new geography).
-    if len(cleaned) < limit:
+    if len(cleaned) < limit and not _over_budget():
         synonyms = [s for s in niche_synonyms.expand_synonyms(niche) if s.lower() != niche.strip().lower()]
         for synonym in synonyms[:3]:
-            if len(cleaned) >= limit:
+            if len(cleaned) >= limit or _over_budget():
                 break
             remaining = limit - len(cleaned)
             syn_candidates, syn_counts, syn_engaged = await _scrape_city_sources(
-                synonym, city, country, remaining, use_maps=False
+                synonym, city, country, remaining, use_maps=False, deadline=deadline
             )
             if not syn_engaged:
                 continue
@@ -285,13 +322,13 @@ async def discover_businesses(
     # Nearby-city fallback: only engages when the *primary* city's sources are
     # healthy but genuinely thin on results (e.g. Islamabad vs. Karachi) — real
     # structured data from a real nearby city, not a stub, tried before Tavily.
-    if len(cleaned) < limit:
+    if len(cleaned) < limit and not _over_budget():
         for nearby in geo_service.nearby_cities(country_code, city, n=_NEARBY_CITY_FALLBACKS):
-            if len(cleaned) >= limit:
+            if len(cleaned) >= limit or _over_budget():
                 break
             remaining = limit - len(cleaned)
             nb_candidates, nb_counts, nb_engaged = await _scrape_city_sources(
-                niche, nearby["name"], country, remaining, use_maps=False
+                niche, nearby["name"], country, remaining, use_maps=False, deadline=deadline
             )
             if not nb_engaged:
                 continue
@@ -310,14 +347,14 @@ async def discover_businesses(
     # searches in a country with few businesses of the niche), try the country's
     # top cities — real businesses a user is still happy to see, with
     # result_city + is_fallback_city tagged honestly.
-    if len(cleaned) < limit:
+    if len(cleaned) < limit and not _over_budget():
         top_cities = geo_service.top_cities(country_code, n=_COUNTRY_TOP_CITIES_FALLBACKS)
         for top in top_cities:
-            if len(cleaned) >= limit or (top.get("name") or "").lower() == (city or "").lower():
+            if len(cleaned) >= limit or _over_budget() or (top.get("name") or "").lower() == (city or "").lower():
                 continue
             remaining = limit - len(cleaned)
             tc_candidates, tc_counts, tc_engaged = await _scrape_city_sources(
-                niche, top["name"], country, remaining, use_maps=False
+                niche, top["name"], country, remaining, use_maps=False, deadline=deadline
             )
             if not tc_engaged:
                 continue
@@ -335,7 +372,7 @@ async def discover_businesses(
     # Last-resort, opt-in top-up when everything above still came up short —
     # never runs otherwise, and never overrides anything already found (see
     # web_search_service.py and lead_merger._SOURCE_PRIORITY).
-    if settings.tavily_enabled and settings.tavily_api_key and len(cleaned) < limit:
+    if settings.tavily_enabled and settings.tavily_api_key and len(cleaned) < limit and not _over_budget():
         extra = await web_search_service.find_extra_businesses(niche, city, country, limit - len(cleaned))
         if extra:
             remerged = lead_merger.merge_businesses(cleaned + extra)

@@ -44,7 +44,7 @@ MAX_SCRAPED_PER_SEARCH = 60
 # against whatever gets passed as `limit`, so keep this modest. A larger
 # multiplier just makes the backend chase leads that get discarded by the
 # results[:limit] truncation below anyway.
-FREE_TIER_OVERFETCH_MULTIPLIER = 4
+FREE_TIER_OVERFETCH_MULTIPLIER = 1.2
 INLINE_ENRICH_CAP = MAX_SCRAPED_PER_SEARCH
 
 
@@ -81,7 +81,7 @@ async def discover(
     limit = max(limit, 1)
 
     enhanced = "lead_discovery_enhanced" in PLAN_CAPABILITIES.get(workspace.plan, set())
-    fetch_limit = limit if enhanced else min(limit * FREE_TIER_OVERFETCH_MULTIPLIER, 120)
+    fetch_limit = limit if enhanced else min(int(limit * FREE_TIER_OVERFETCH_MULTIPLIER), 120)
 
     country_name = geo_service.country_name_for_code(payload.country) or payload.country
 
@@ -132,7 +132,11 @@ async def discover(
         "plan": workspace.plan,
         "use_browser": enhanced,
         "use_ai": enhanced,
-        "use_google_maps": enhanced,
+        # Google Maps name-lookup enrichment is available to every plan — it's a
+        # free open-source crawler like the discovery sources themselves, and it
+        # is the only way to recover the real GBP phone/website for the
+        # name-only leads OSM/directories produce.
+        "use_google_maps": True,
     }
 
     search_id = str(uuid.uuid4())
@@ -140,7 +144,7 @@ async def discover(
     if stored:
         try:
             enrich_discovered_batch.delay(
-                search_id, payload.city, country_name, payload.country, enhanced, enhanced, enhanced
+                search_id, payload.city, country_name, payload.country, enhanced, enhanced, True
             )
         except Exception as exc:
             logger.warning("Could not dispatch background enrichment for %s: %s", search_id, exc)

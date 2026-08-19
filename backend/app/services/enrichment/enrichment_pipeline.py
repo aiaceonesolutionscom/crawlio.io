@@ -139,6 +139,22 @@ async def enrich_item(
         result["enrichment_error"] = "missing name"
         return result
 
+    # 1. Google Maps name-lookup FIRST: fills the phone/website/email/address
+    #    the free structured sources (OSM, directories) don't carry. Runs when
+    #    ANY contact channel is missing (not just when both phone+website are
+    #    absent), so a lead with a phone but no website/email still gets its
+    #    GBP panel pulled.
+    if use_google_maps and not (result.get("phone") and result.get("website") and result.get("email")):
+        maps_record = await _maps_lookup(result, city, country)
+        if maps_record:
+            _fill_gaps(result, maps_record)
+            sources.append("google_maps")
+            website = result.get("website") or website
+
+    # 2. Website scrape pass: ANY website — whether it arrived with the lead,
+    #    from the maps lookup, or from Tavily — is scraped for email/phone/
+    #    address. This fixes the order bug where a maps-added website was
+    #    never crawled for its contact data.
     scraped: dict = {}
     if website:
         try:
@@ -149,16 +165,6 @@ async def enrich_item(
         if scraped:
             _fill_gaps(result, scraped)
             sources.append("website")
-
-    # Optional Google Maps name-lookup: the business's own GBP panel often has
-    # the phone/address/hours that the free structured sources don't publish.
-    # Only consulted when the caller opts in — it is the slowest enrichment
-    # step (a Playwright lookup per lead), so it must stay opt-in.
-    if use_google_maps and not (result.get("phone") or result.get("website")):
-        maps_record = await _maps_lookup(result, city, country)
-        if maps_record:
-            _fill_gaps(result, maps_record)
-            sources.append("google_maps")
 
     return await _finalize(result, scraped, sources, city, country)
 
@@ -183,8 +189,29 @@ async def enrich_items_batch(
     sources_by_index: dict[int, list[str]] = {i: [] for i in range(len(results))}
     scraped_by_index: dict[int, dict] = {}
 
-    # Skip website work for leads with no name — enrich_item's own "missing
-    # name" rule (applied below) drops them regardless of what we'd scrape.
+    # 1. Google Maps name-lookup pass FIRST: for every lead missing ANY contact
+    #    channel (phone/website/email), pull its real GBP panel data by name.
+    #    Sequential (one Playwright lookup per lead), bounded by MAPS_LOOKUP_CAP
+    #    to keep the batch's latency sane. This runs before the website pass so
+    #    any website the GBP panel reveals gets scraped below.
+    if use_google_maps:
+        looked_up = 0
+        for i, result in enumerate(results):
+            if looked_up >= MAPS_LOOKUP_CAP:
+                break
+            if not result.get("name"):
+                continue
+            if result.get("phone") and result.get("website") and result.get("email"):
+                continue
+            maps_record = await _maps_lookup(result, city, country)
+            looked_up += 1
+            if maps_record:
+                _fill_gaps(result, maps_record)
+                sources_by_index[i].append("google_maps")
+
+    # 2. Website scrape pass over EVERY website the leads now carry — whether it
+    #    arrived with the source, from the maps lookup above, or from Tavily.
+    #    This is the "website from any source gets crawled" rule.
     websites = [(r.get("website") or "") if r.get("name") else "" for r in results]
 
     if use_browser:
@@ -238,25 +265,6 @@ async def enrich_items_batch(
                 if scraped:
                     scraped_by_index[i] = scraped
                     sources_by_index[i].append("website")
-
-    # Optional Google Maps name-lookup pass: for leads that still have no
-    # contact channel (name-only OSM/directory results), pull their real GBP
-    # panel data by name. Sequential, so it shares a fresh browser per lead —
-    # bounded by MAPS_LOOKUP_CAP to keep the batch's latency sane.
-    if use_google_maps:
-        looked_up = 0
-        for i, result in enumerate(results):
-            if looked_up >= MAPS_LOOKUP_CAP:
-                break
-            if not result.get("name"):
-                continue
-            if result.get("phone") or result.get("website"):
-                continue
-            maps_record = await _maps_lookup(result, city, country)
-            looked_up += 1
-            if maps_record:
-                _fill_gaps(result, maps_record)
-                sources_by_index[i].append("google_maps")
 
     for i, result in enumerate(results):
         name = result.get("name") or ""

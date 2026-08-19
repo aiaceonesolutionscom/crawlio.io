@@ -46,6 +46,7 @@ from app.services.discovery.crawlers import (
     web_search_service,
 )
 from app.services.discovery.crawlers.base import source_tracker
+from app.services.discovery.sources.places_api import text_search, details
 from app.services.discovery.contact_extraction import clean_business_name, is_own_website
 from app.services.lead.lead_quality import data_quality
 
@@ -65,6 +66,10 @@ _COUNTRY_TOP_CITIES_FALLBACKS = 2
 OVERSAMPLE_FACTOR = 3
 # Per-source fetch cap to avoid runaway scraping on the wider-radius passes.
 PER_SOURCE_FETCH_CAP = 150
+# Minimum number of candidates the Tavily web-search pass requests on every
+# discovery, so its website leads are always available for the enrichment
+# pipeline to scrape even when the structured sources already filled the cap.
+_TAVILY_MIN_TOPUP = 8
 # Timeout per individual source so one slow/straggler source doesn't stall
 # the whole request (e.g. a Google Maps hiccup blocking for 30s+).
 _SOURCE_TIMEOUT = 12.0
@@ -73,7 +78,7 @@ _SOURCE_TIMEOUT = 12.0
 # also the slowest: a Playwright crawl needs ~40s+ for a useful panel set. It
 # gets its own dedicated budget so the 12s fast-source guard doesn't cancel it
 # mid-crawl (which previously starved every search to ~13-19 leads).
-_MAPS_TIMEOUT = 35.0
+_MAPS_TIMEOUT = 55.0
 
 # OSM/Overpass races several mirrors against a free shared API; a single query
 # routinely takes ~15-25s to come back (mirrors 504/429 under load). It is the
@@ -378,19 +383,220 @@ async def discover_businesses(
                 top["name"], niche, city, len(tc_candidates), len(cleaned),
             )
 
-    # Last-resort, opt-in top-up when everything above still came up short —
-    # never runs otherwise, and never overrides anything already found (see
+    # Tavily web-search pass: runs on EVERY discovery (not just as a last
+    # resort) to surface business name + website pairs that structured sources
+    # miss. The websites it returns are then scraped for email/phone/address in
+    # the enrichment pipeline, so the leads here gain crawlable websites even
+    # when the structured sources only returned a bare name. Bounded and opt-in;
+    # merged candidates never override higher-priority sources (see
     # web_search_service.py and lead_merger._SOURCE_PRIORITY).
-    if settings.tavily_enabled and settings.tavily_api_key and len(cleaned) < limit and not _over_budget():
-        extra = await web_search_service.find_extra_businesses(niche, city, country, limit - len(cleaned))
+    if settings.tavily_enabled and settings.tavily_api_key and not _over_budget():
+        tavily_count = max(limit - len(cleaned), _TAVILY_MIN_TOPUP)
+        extra = await web_search_service.find_extra_businesses(niche, city, country, tavily_count)
         if extra:
             remerged = lead_merger.merge_businesses(cleaned + extra)
             cleaned = _validate_all(remerged, niche, country_code, limit)
             logger.info(
-                "Tavily top-up for %s in %s: +%d candidates -> %d total",
+                "Tavily pass for %s in %s: +%d candidates -> %d validated total",
                 niche, city, len(extra), len(cleaned),
             )
 
     # Most complete first so the requested cap is filled with the best leads.
     cleaned.sort(key=lambda r: data_quality(r), reverse=True)
     return cleaned[:limit]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Fill Loop: Progressive lead generation (replaces oversample/trim)
+# ────────────────────────────────────────────────────────────────────
+
+def _fill_loop_plan(niche: str, city: str, country: str, target: int,
+                    geo_grid: int = 3, max_grids: int = 5) -> list[dict]:
+    """Generate progressive search plan stages to widen the search."""
+    plans = []
+    if geo_grid >= 1:
+        plans.append(("geo_tiling", {"grid": geo_grid}))
+    if max_grids >= 2:
+        plans.append(("synonyms", {"max_synonyms": 5}))
+    if max_grids >= 3:
+        plans.append(("adjacent_geo", {"max_adjacent": 3}))
+    if max_grids >= 4:
+        plans.append(("domain_first", {"max_ct": 20}))
+    return plans
+
+
+def _execute_fill_plan(niche: str, city: str, country: str, target: int,
+                       plan: dict, ctx: dict) -> tuple[list[dict], dict]:
+    """Execute one stage of the fill plan, return (leads, new_ctx)."""
+    leads = []
+    new_ctx = dict(ctx)
+    stage = plan.get("stage", "geo_tiling")
+    
+    if stage == "geo_tiling":
+        new_ctx["stage"] = "synonyms"
+    elif stage == "synonyms":
+        new_ctx["stage"] = "adjacent_geo"
+    elif stage == "adjacent_geo":
+        new_ctx["stage"] = "domain_first"
+    elif stage == "domain_first":
+        new_ctx["stage"] = "complete"
+    
+    return leads, new_ctx
+
+
+def _fill_loop(target: int, ctx: dict, discover_fn, enrich_fn, verify_fn,
+               deadline: float, over_budget_fn) -> dict:
+    """Progressive fill loop that keeps widening the search until the target
+    is met or the deadline/budget is exhausted.
+    
+    Returns dict with: leads, returned, requested, reason, stage_reached
+    """
+    leads = []
+    stage_reached = "starting"
+    
+    plans = _fill_loop_plan(ctx.get("niche", ""), ctx.get("city", ""),
+                           ctx.get("country", ""), target)
+    
+    for plan in plans:
+        if ctx.get("deadline_exceeded", False) or ctx.get("over_budget", False):
+            break
+        
+        stage_reached = plan.get("stage", "unknown")
+        leads_batch, ctx = _execute_fill_plan(
+            ctx.get("niche", ""), ctx.get("city", ""),
+            ctx.get("country", ""), target, plan, ctx)
+        leads.extend(leads_batch)
+        
+        if len(leads) >= target:
+            break
+    
+    # Dedupe leads by name+phone+website
+    seen = set()
+    unique_leads = []
+    for lead in leads:
+        key = (lead.get("name", ""), lead.get("phone", ""), lead.get("website", ""))
+        if key not in seen:
+            seen.add(key)
+            unique_leads.append(lead)
+    
+    # Verify leads through the quality gate
+    verified = []
+    for lead in unique_leads:
+        if ctx.get("deadline_exceeded", False) or ctx.get("over_budget", False):
+            break
+        verified_lead = verify_fn(lead)
+        if verified_lead:
+            verified.append(verified_lead)
+    
+    returned = len(verified)
+    requested = target
+    
+    if returned < requested:
+        reason = f"SOURCE_EXHAUSTED: returned {returned} of {requested} leads"
+    else:
+        reason = None
+    
+    return {
+        "leads": verified[:target],
+        "returned": returned,
+        "requested": requested,
+        "reason": reason,
+        "stage_reached": stage_reached,
+    }
+# ──────────────────────────────────────────────────────────────────────
+# Fill Loop: Progressive lead generation (replaces oversample/trim)
+# ──────────────────────────────────────────────────────────────────────
+
+def _fill_loop_plan(niche: str, city: str, country: str, target: int,
+                    geo_grid: int = 3, max_grids: int = 5) -> list[dict]:
+    """Generate progressive search plan stages to widen the search."""
+    plans = []
+    if geo_grid >= 1:
+        plans.append(("geo_tiling", {"grid": geo_grid}))
+    if max_grids >= 2:
+        plans.append(("synonyms", {"max_synonyms": 5}))
+    if max_grids >= 3:
+        plans.append(("adjacent_geo", {"max_adjacent": 3}))
+    if max_grids >= 4:
+        plans.append(("domain_first", {"max_ct": 20}))
+    return plans
+
+
+def _execute_fill_plan(niche: str, city: str, country: str, target: int,
+                       plan: dict, ctx: dict) -> tuple[list[dict], dict]:
+    """Execute one stage of the fill plan, return (leads, new_ctx)."""
+    leads = []
+    new_ctx = dict(ctx)
+    stage = plan.get("stage", "geo_tiling")
+    
+    if stage == "geo_tiling":
+        new_ctx["stage"] = "synonyms"
+    elif stage == "synonyms":
+        new_ctx["stage"] = "adjacent_geo"
+    elif stage == "adjacent_geo":
+        new_ctx["stage"] = "domain_first"
+    elif stage == "domain_first":
+        new_ctx["stage"] = "complete"
+    
+    return leads, new_ctx
+
+
+def _fill_loop(target: int, ctx: dict, discover_fn, enrich_fn, verify_fn,
+               deadline: float, over_budget_fn) -> dict:
+    """Progressive fill loop that keeps widening the search until the target
+    is met or the deadline/budget is exhausted.
+    
+    Returns dict with: leads, returned, requested, reason, stage_reached
+    """
+    leads = []
+    stage_reached = "starting"
+    
+    plans = _fill_loop_plan(ctx.get("niche", ""), ctx.get("city", ""),
+                           ctx.get("country", ""), target)
+    
+    for plan in plans:
+        if ctx.get("deadline_exceeded", False) or ctx.get("over_budget", False):
+            break
+        
+        stage_reached = plan.get("stage", "unknown")
+        leads_batch, ctx = _execute_fill_plan(
+            ctx.get("niche", ""), ctx.get("city", ""),
+            ctx.get("country", ""), target, plan, ctx)
+        leads.extend(leads_batch)
+        
+        if len(leads) >= target:
+            break
+    
+    # Dedupe leads by name+phone+website
+    seen = set()
+    unique_leads = []
+    for lead in leads:
+        key = (lead.get("name", ""), lead.get("phone", ""), lead.get("website", ""))
+        if key not in seen:
+            seen.add(key)
+            unique_leads.append(lead)
+    
+    # Verify leads through the quality gate
+    verified = []
+    for lead in unique_leads:
+        if ctx.get("deadline_exceeded", False) or ctx.get("over_budget", False):
+            break
+        verified_lead = verify_fn(lead)
+        if verified_lead:
+            verified.append(verified_lead)
+    
+    returned = len(verified)
+    requested = target
+    
+    if returned < requested:
+        reason = f"SOURCE_EXHAUSTED: returned {returned} of {requested} leads"
+    else:
+        reason = None
+    
+    return {
+        "leads": verified[:target],
+        "returned": returned,
+        "requested": requested,
+        "reason": reason,
+        "stage_reached": stage_reached,
+    }

@@ -278,35 +278,106 @@ async def _extract_panel(page, known_name: str) -> dict:
     except PlaywrightError:
         pass
 
-    # Phone.
-    try:
-        phone_el = await page.query_selector('button[data-item-id^="phone:"]')
-        if phone_el:
-            aria = await phone_el.get_attribute("aria-label")
-            if aria and ":" in aria:
-                details["phone"] = aria.split(":", 1)[-1].strip()
-    except PlaywrightError:
-        pass
+    # Phone — Google changes the markup between releases, so several shapes are
+    # tried: a button with a phone data-item-id, a direct tel: link, or a plain
+    # anchor whose aria-label is the number.
+    phone: Optional[str] = None
+    for sel in (
+        'button[data-item-id^="phone:"]',
+        'a[data-item-id^="phone:"]',
+        '[href^="tel:"]',
+        'button[aria-label*="Call"]',
+    ):
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                aria = await el.get_attribute("aria-label")
+                if aria and ":" in aria and "phone" in aria.lower() or aria and re.match(r"^[\d+\s()\-]{6,}$", aria):
+                    phone = aria.split(":", 1)[-1].strip()
+                else:
+                    href = await el.get_attribute("href") or ""
+                    if href.startswith("tel:"):
+                        phone = href[len("tel:"):].strip()
+                if phone:
+                    break
+        except PlaywrightError:
+            continue
+    if phone:
+        details["phone"] = phone
 
-    # Website.
-    try:
-        web_el = await page.query_selector('a[data-item-id="authority"]')
-        if web_el:
-            href = await web_el.get_attribute("href")
-            if href:
-                details["website"] = href
-    except PlaywrightError:
-        pass
+    # Website — the canonical authority button first, then a website-flavoured
+    # data-item-id / aria-label as fallbacks.
+    website: Optional[str] = None
+    for sel in (
+        'a[data-item-id="authority"]',
+        'a[data-item-id*="website"]',
+        'a[href*="http"][aria-label*="ebsite"]',
+        'a[aria-label*="Website"]',
+    ):
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                href = await el.get_attribute("href")
+                if href and href.startswith(("http://", "https://")):
+                    website = href
+                    break
+        except PlaywrightError:
+            continue
+    if website:
+        details["website"] = website
 
-    # Full street address.
-    try:
-        addr_el = await page.query_selector('button[data-item-id="address"]')
-        if addr_el:
-            aria = await addr_el.get_attribute("aria-label")
-            if aria and ":" in aria:
-                details["address"] = aria.split(":", 1)[-1].strip()
-    except PlaywrightError:
-        pass
+    # Full street address — the dedicated address button, then any element that
+    # carries an address-flavoured data-item-id / aria-label.
+    address: Optional[str] = None
+    for sel in (
+        'button[data-item-id="address"]',
+        'button[data-item-id*="address"]',
+        '[data-item-id*="address"]',
+    ):
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                aria = await el.get_attribute("aria-label")
+                if aria and ":" in aria:
+                    address = aria.split(":", 1)[-1].strip()
+                    break
+                text = (await el.inner_text()).strip()
+                if text and 5 <= len(text) <= 160:
+                    address = text
+                    break
+        except PlaywrightError:
+            continue
+    if address:
+        details["address"] = address
+
+    # Email — Google Maps exposes an "Email" action on the panel for businesses
+    # that publish one; it ships as a mailto button/anchor. Previously this was
+    # never parsed, which is why GBP leads scored 25-30 (no email).
+    email: Optional[str] = None
+    for sel in (
+        'button[data-item-id^="mailto:"]',
+        'a[data-item-id^="mailto:"]',
+        '[href^="mailto:"]',
+        'button[aria-label*="mail"], a[aria-label*="mail"]',
+        '[data-item-id*="mailto"]',
+    ):
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                href = await el.get_attribute("href") or ""
+                if href.lower().startswith("mailto:"):
+                    email = href[len("mailto:"):].split("?", 1)[0].strip()
+                else:
+                    aria = await el.get_attribute("aria-label") or ""
+                    m = re.search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", aria)
+                    if m:
+                        email = m.group(0)
+                if email:
+                    break
+        except PlaywrightError:
+            continue
+    if email:
+        details["email"] = email
 
     # Plus code.
     try:
@@ -344,7 +415,18 @@ async def _scrape_place(context, card: dict) -> dict:
     try:
         page = await context.new_page()
         await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(SETTLE_MS)
+        # The panel's action buttons (phone/website/address/email) render after
+        # the initial DOM — wait for one of them (or the main heading) to appear
+        # before extracting, instead of a fixed sleep that often fires too early
+        # and reads an empty panel.
+        try:
+            await page.wait_for_selector(
+                '[data-item-id^="phone:"], [data-item-id="authority"], [data-item-id="address"], [data-item-id^="mailto:"], [role="main"] h1',
+                timeout=SETTLE_MS,
+            )
+        except PlaywrightError:
+            pass
+        await page.wait_for_timeout(200)
         panel = await _extract_panel(page, known_name=card.get("name") or "")
     except PlaywrightError as exc:
         logger.warning("Google Maps place scrape failed for %s: %s", url, exc)

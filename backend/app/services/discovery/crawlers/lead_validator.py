@@ -1,4 +1,4 @@
-"""Lead validation — the quality gate that guarantees "real data".
+"""Lead validation �?" the quality gate that guarantees "real data".
 
 Every lead that survives to the UI must carry a *real* contact channel. This
 module:
@@ -19,9 +19,7 @@ from typing import Optional
 
 from app.core.config import settings
 from app.services.discovery.contact_extraction import (
-
     DISPOSABLE_EMAIL_DOMAINS,
-    EMAIL_BLOCKLIST_DOMAINS,
     PLACEHOLDER_LOCAL_PARTS,
     SYSTEM_EMAIL_LOCAL_PARTS,
 )
@@ -39,10 +37,6 @@ _PK_LANDLINE_RE = re.compile(r"^0\d{2,3}[-\s]?\d{6,8}$")
 # +92 3xx-xxxxxxx or 0092 3xx-xxxxxxx (grouping tolerated anywhere in the number)
 _PK_INTL_RE = re.compile(r"^(?:\+?92|0092)[-\s]?3[-\s]?\d{2}[-\s]?\d{7}$")
 
-# Runs of consecutive digits ("1234567890") are placeholder/tracking numbers —
-# distinct from the all-same-digit check below, and never a real reachable line.
-_SEQUENTIAL_DIGITS = {"123456789", "1234567890", "0123456789", "987654321", "9876543210"}
-
 
 def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
     """Return a canonical E.164-ish phone (e.g. +923001234567) or None if the
@@ -55,7 +49,7 @@ def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
     digits = re.sub(r"\D", "", candidate)
     if len(digits) < 7:
         return None
-    if len(set(digits)) == 1 or digits in _SEQUENTIAL_DIGITS:
+    if len(set(digits)) == 1 or digits in {"1234567", "12345678", "123456789", "0123456789"}:
         return None
     if candidate.startswith("+") and len(digits) >= 11:
         return "+" + digits
@@ -68,11 +62,19 @@ def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
             return "+92" + digits[-10:]
         if _PK_LANDLINE_RE.match(candidate):
             return "+92" + digits[-10:]
-        # Falls through to the generic branch below: a number that isn't in an
-        # obvious PK format is still kept when it parses as a plausible length,
-        # rather than rejecting the whole lead over a formatting quirk.
-    # Generic: a bare 10-12 digit national number is kept as a plain integer
-    # string so unusual-but-real formats still surface in the lead list.
+        # Not obviously Pakistani �?" reject rather than guess wrong.
+        return None
+    # Other countries: normalize using the worldwide calling-code map so a US/
+    # UK/Gulf/Indian number comes back in canonical E.164 (+1...+44...+971...
+    # +91...) instead of a bare digit string. This is what feeds the worldwide
+    # WhatsApp deep-link builder.
+    from app.services.discovery.crawlers.whatsapp_links import normalize_e164
+
+    e164 = normalize_e164(candidate, cc)
+    if e164:
+        return e164
+    # Unknown/edge-country code (or a number we can't map confidently) �?" keep a
+    # plain national number so non-PK searches still show phones.
     if 9 <= len(digits) <= 12:
         return digits
     return None
@@ -138,10 +140,6 @@ def validate_email(email: str) -> Optional[str]:
         return None
     if domain in DISPOSABLE_EMAIL_DOMAINS:
         return None
-    # System/telemetry domains (e.g. o477720.ingest.sentry.io) must be rejected
-    # by suffix — a subdomain is just as fake as the bare blocked domain.
-    if any(domain == d or domain.endswith("." + d) for d in EMAIL_BLOCKLIST_DOMAINS):
-        return None
     if settings.validate_emails and not _has_mx(domain):
         return None
     return cleaned
@@ -159,9 +157,36 @@ def validate_emails(item: dict) -> None:
 
 def validate_lead(item: dict, country_code: str = "PK") -> Optional[dict]:
     """Clean a lead's phone/email and return it only if a real contact channel
-    survives. Returns None when the lead has nothing real left."""
+    survives. Returns None when the lead has nothing real left.
+
+    Accepted contact channels:
+    - phone (normalized to E.164 when plausible),
+    - email (MX-verified when validation is enabled),
+    - website,
+    - name + street address + lat/lon (a real, geocoded business from OSM/BizData
+      that simply publishes no phone/email/website — visitable, not invented).
+    A bare name with no channel is still dropped."""
     normalize_phones(item, country_code)
     validate_emails(item)
-    if not (item.get("phone") or item.get("email") or item.get("website")):
-        return None
-    return item
+
+    has_phone = bool(item.get("phone"))
+    has_email = bool(item.get("email"))
+    has_website = bool(item.get("website"))
+
+    if has_phone or has_email or has_website:
+        return item
+
+    # OSM-derived sources (BizData, Overpass) sometimes carry a real street
+    # address + coordinates but no phone/email/website. They're real, visitable
+    # businesses — accept them with a lower completeness score rather than
+    # dropping them, so thin niches still return what the free web actually has.
+    name = (item.get("name") or "").strip()
+    address = (item.get("address") or "").strip()
+    lat, lon = item.get("lat"), item.get("lon")
+    has_coords = isinstance(lat, (int, float)) and isinstance(lon, (int, float)) \
+        and -90 <= lat <= 90 and -180 <= lon <= 180
+    if name and address and has_coords:
+        return item
+
+    # No real contact channel at all - drop the lead
+    return None

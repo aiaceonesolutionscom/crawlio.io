@@ -15,10 +15,8 @@ import re
 from typing import Optional
 
 # Source priority for merge conflicts: earlier sources win a field.
-# Nominatim and Geoapify carry the same OSM data as Overpass, so they sit at
-# the same trust level; Google Maps still wins conflicts because it holds the
-# freshest phone/address/rating.
-_SOURCE_PRIORITY = ["google_maps", "directory", "openstreetmap", "nominatim", "geoapify", "web_search"]
+_SOURCE_PRIORITY = ["google_maps", "directory", "openstreetmap", "web_search",
+                    "wikidata", "wikipedia", "certtransparency", "dns"]
 
 
 def normalize_name(name: str) -> str:

@@ -2,7 +2,6 @@ import pytest
 
 from app.services.discovery.crawlers import maps_crawler
 
-
 PLACE_URL = (
     "https://www.google.com/maps/place/Sakura+Dental+Studio/"
     "data=!4m5!3m4!1s0x0:0x0!8m2!3d24.8607!4d67.0011"

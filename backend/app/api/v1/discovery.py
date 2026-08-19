@@ -39,7 +39,7 @@ router = APIRouter(prefix="/leads/discover", tags=["lead-discovery"])
 # against whatever gets passed as `limit`, so keep this modest. A larger
 # multiplier just makes the backend chase leads that get discarded by the
 # results[:limit] truncation below anyway.
-FREE_TIER_OVERFETCH_MULTIPLIER = 2
+FREE_TIER_OVERFETCH_MULTIPLIER = 1.2
 
 
 @router.get("/niches")
@@ -112,7 +112,7 @@ async def discover(
         "plan": workspace.plan,
         "use_browser": enhanced,
         "use_ai": enhanced,
-        "use_google_maps": enhanced,
+        "use_google_maps": True,
     }
 
     search_id = str(uuid.uuid4())
@@ -186,7 +186,7 @@ async def _discover_in_background(
     if results:
         try:
             await _enrich_batch_async(
-                search_id, payload.city, country_name, payload.country, enhanced, enhanced, enhanced
+                search_id, payload.city, country_name, payload.country, enhanced, enhanced, True
             )
         except Exception:
             logger.exception("Background enrichment failed for %s", search_id)

@@ -1,8 +1,17 @@
+import pytest
 import respx
 from httpx import Response
 
 from app.services.discovery import website_lookup_service
 from app.services.discovery.website_lookup_service import BING_URL, DDG_URL, GOOGLE_URL
+
+
+@pytest.fixture(autouse=True)
+def _disable_tavily(monkeypatch):
+    """These tests exercise the free HTML engine chain (DDG -> Bing -> Google).
+    Tavily runs first in the real service, but it needs an API key and an HTTP
+    call — disable it so the tests stay hermetic and deterministic."""
+    monkeypatch.setattr(website_lookup_service.settings, "tavily_enabled", False)
 
 
 def _ddg_html(*results: str) -> str:

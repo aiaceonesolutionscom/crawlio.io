@@ -139,11 +139,17 @@ async def test_search_places_requests_extratags_and_english():
         )
         await geocoding_service.search_places("Dental Clinic", "Lhr-unique-query-8", "Pakistan")
 
-    params = route.calls[0].request.url.params
-    assert params["extratags"] == "1"
-    assert params["addressdetails"] == "1"
-    assert params["accept-language"] == "en"
-    assert params["q"] == "Dental Clinic in Lhr-unique-query-8, Pakistan"
+    assert route.calls
+    for call in route.calls:
+        params = call.request.url.params
+        assert params["extratags"] == "1"
+        assert params["addressdetails"] == "1"
+        assert params["accept-language"] == "en"
+    # The "in {city}, {country}" phrasing must be among the variants tried
+    # (bare phrasing is attempted first by design — Nominatim's free-text
+    # search returns 0 results for some niches phrased with "in"/"of").
+    qs = [call.request.url.params["q"] for call in route.calls]
+    assert "Dental Clinic in Lhr-unique-query-8, Pakistan" in qs
 
 
 async def test_search_places_returns_empty_on_http_failure():
@@ -161,9 +167,12 @@ async def test_search_places_caches_repeated_queries():
             return_value=Response(200, json=mock_response)
         )
         await geocoding_service.search_places("Dental Clinic", "Cacheville-unique-query-10", "Pakistan")
+        first_pass_calls = route.call_count
         await geocoding_service.search_places("   dental    clinic ", "Cacheville-unique-query-10", "Pakistan")
 
-    assert route.call_count == 1
+    # Repeated (normalized) queries must not hit Nominatim again — every
+    # variant from the first pass is served from the in-memory cache.
+    assert route.call_count == first_pass_calls
 
 
 async def test_search_places_skips_records_without_name_or_coords():

@@ -1,25 +1,26 @@
-"""Free business-directory crawlers (Pakistan focus).
+"""Free business-directory crawlers (worldwide focus).
 
 Directories are the tertiary source behind Google Maps and OSM/Overpass: they
 add businesses Google Maps might miss, and — unlike OSM — occasionally carry a
 real email or social profile. This module hits the plain-HTML pages of free
-directories (YellowPages.pk, Cybo) with httpx, parses listings heuristically and
-returns only records that carry at least one real contact channel (phone, email
-or website).
+directories that actually respond without a bot-wall (verified live:
+YellowPage.pk for Pakistan, Hotfrog for the US/UK), parses listings
+heuristically and returns only records that carry at least one real contact
+channel (phone, email or website).
 
 Everything degrades to [] on failure (bot-wall, 404, markup change) so a broken
 directory can never block a search. All requests go through a shared rate limiter
 to stay a good citizen of these free sites.
 """
+import html
+import json
 import logging
 import re
 from typing import Optional
 from urllib.parse import quote, urljoin, urlparse
 
-import httpx
-
 from app.core.config import settings
-from app.services.discovery.crawlers.base import CircuitBreaker, RateLimiter
+from app.services.discovery.crawlers.base import CircuitBreaker, ProxyRotator, RateLimiter, RobotsTxt, fetch_text, source_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -31,39 +32,14 @@ HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
 }
-# A more complete browser header set to retry with after a 403 — some
-# directories (e.g. Cybo) bot-wall the bare UA but accept a full header set.
-_RETRY_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "max-age=0",
-    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-}
 _breaker = CircuitBreaker(name="directories", failure_threshold=3, cooldown_seconds=300.0)
-_limiter = RateLimiter(name="directories", interval=0.7)
+_limiter = RateLimiter(name="directories", interval=1.2)
+_robots = RobotsTxt()
+_proxy_rotator = ProxyRotator(settings.http_proxy_list, name="directory-proxy")
 
 _TEL_RE = re.compile(r'href=["\']tel:([^"\'?]+)', re.IGNORECASE)
 _MAILTO_RE = re.compile(r'href=["\']mailto:([^"\'?]+)', re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-_HEADING_RE = re.compile(
-    r"<h([1-4])[^>]*>\s*(.*?)\s*</h\1>|<a[^>]+class=\"[^\"]*(?:name|title|heading)[^\"]*\"[^>]*>\s*(.*?)\s*</a>",
-    re.IGNORECASE | re.DOTALL,
-)
-# A generous window of markup before a tel:/mailto: link — the business name
-# heading normally sits right above the contact row in a listing card.
-_CONTEXT_BEFORE = 700
 
 _CLEAN_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -74,172 +50,165 @@ def _clean(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def _is_external(href: str, page_host: str) -> bool:
-    try:
-        host = urlparse(urljoin(page_host, href)).netloc.lower()
-    except ValueError:
-        return False
-    return bool(host) and host != page_host and not host.endswith("." + page_host)
-
-
-async def _fetch(url: str) -> Optional[str]:
-    """GET a directory page. Returns HTML or None; never raises. On a 403
-    (bot-wall) retries once with a full browser-like header set — a few
-    directories reject the minimal UA but accept the complete one."""
-    if _breaker.open:
-        return None
-    await _limiter.wait()
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code == 403:
-                # Bot-wall: retry with the full browser header set once.
-                await _limiter.wait()
-                async with httpx.AsyncClient(timeout=TIMEOUT, headers=_RETRY_HEADERS, follow_redirects=True) as retry_client:
-                    retry = await retry_client.get(url)
-                    if retry.status_code < 400:
-                        return retry.text
-                logger.info("Directory page %s blocked (403)", url)
-                return None
-            if resp.status_code >= 400:
-                logger.info("Directory page %s returned %d", url, resp.status_code)
-                return None
-            return resp.text
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Directory fetch failed for %s: %s", url, exc)
-        _breaker.record_failure()
-        return None
-
-
-_BLOCK_OPEN_RE = re.compile(r"<(li|article|tr)\b[^>]*>", re.IGNORECASE)
-_BLOCK_CLOSE_RE = re.compile(r"</(li|article|tr)>", re.IGNORECASE)
-
-
-def _split_blocks(html: str) -> list[str]:
-    """Split directory markup into listing blocks using <li>/<article>/<tr>
-    containers (the containers directory sites actually use). Nested containers
-    are ignored — close enough for typical listing markup."""
-    blocks: list[str] = []
-    for m in _BLOCK_OPEN_RE.finditer(html):
-        close = _BLOCK_CLOSE_RE.search(html, m.end())
-        block_end = close.start() if close else len(html)
-        blocks.append(html[m.start():block_end])
-    return blocks
-
-
-def _parse_block(block: str, page_host: str) -> Optional[dict]:
-    """Extract one business from a listing block. Requires a tel: link (that's
-    what makes it a reachable lead) plus whatever name/email/website the same
-    block carries — never borrows fields from an adjacent listing."""
-    tel_m = _TEL_RE.search(block)
-    if not tel_m:
-        return None
-    raw_phone = tel_m.group(1).strip()
-    if len(re.sub(r"\D", "", raw_phone)) < 7:
-        return None
-
-    name = ""
-    for heading_match in _HEADING_RE.finditer(block):
-        candidate = _clean(heading_match.group(2) or heading_match.group(3) or "")
-        if candidate:
-            name = candidate
-    if not name:
-        return None
-
-    email = None
-    mailto = _MAILTO_RE.search(block)
-    if mailto:
-        email = mailto.group(1).strip().lower()
-    if not email:
-        text_email = _EMAIL_RE.findall(block)
-        email = text_email[0].lower() if text_email else None
-
-    website = None
-    for wm in re.finditer(r'href=["\'](https?://[^"\']+)["\']', block, re.IGNORECASE):
-        href = wm.group(1)
-        if _is_external(href, page_host):
-            website = href
-            break
-
-    return {"name": name, "phone": raw_phone, "email": email, "website": website}
-
-
-def _parse_listings(html: str, base_url: str) -> list[dict]:
-    """Parse a directory page into business records. When the page uses
-    <li>/<article>/<tr> listing containers we parse each block independently;
-    otherwise we fall back to a window around each tel: link (still bounded, so
-    a neighbour's email can't leak in). Works across directories regardless of
-    their exact CSS classes."""
-    if not html:
-        return []
-    page_host = urlparse(base_url).netloc.lower()
-    blocks = _split_blocks(html)
-    if not blocks:
-        blocks = [html]
-
-    seen: set[tuple] = set()
-    out: list[dict] = []
-
-    for block in blocks:
-        if _TEL_RE.search(block) is None:
-            # Unsplit page fallback: process each tel link's local window.
-            if len(blocks) == 1:
-                for m in _TEL_RE.finditer(block):
-                    window = html[max(0, m.start() - _CONTEXT_BEFORE):min(len(html), m.end() + 400)]
-                    record = _parse_block(window, page_host)
-                    if record:
-                        key = (record["name"].lower(), record["phone"])
-                        if key not in seen:
-                            seen.add(key)
-                            out.append(record)
-                return out
-            continue
-        record = _parse_block(block, page_host)
-        if not record:
-            continue
-        key = (record["name"].lower(), record["phone"])
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(record)
-
-    return out
-
-
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")
 
 
-async def _yellowpages_pk(niche: str, city: str, country: str, limit: int) -> list[dict]:
-    base = "https://www.yellowpages.com.pk"
-    url = f"{base}/search/{quote(_slug(niche))}/{quote(_slug(city))}"
-    html = await _fetch(url)
-    if not html:
-        # Fallback: category browse page for the city.
-        url = f"{base}/browse/{quote(_slug(city))}"
-        html = await _fetch(url)
-    records = _parse_listings(html or "", url)
-    return records[:limit]
+async def _fetch(url: str) -> Optional[str]:
+    """GET a directory page with TLS impersonation. Returns HTML or None;
+    never raises."""
+    if _breaker.open:
+        return None
+    await _limiter.wait()
+    proxy = await _proxy_rotator.get(sticky_key=urlparse(url).netloc)
+    outcome = await fetch_text(
+        url,
+        headers=HEADERS,
+        timeout=TIMEOUT,
+        proxy=proxy,
+    )
+    if outcome.blocked:
+        logger.warning("Directory %s served a block/rate-limit wall (%d)", url, outcome.status)
+        _breaker.record_failure()
+        source_tracker.record_failure("directory")
+        _proxy_rotator.mark_failure(proxy)
+        return None
+    if not outcome.ok:
+        logger.info("Directory page %s returned %d", url, outcome.status)
+        return None
+    _proxy_rotator.mark_success(proxy)
+    return outcome.text
 
 
-async def _cybo(niche: str, city: str, country: str, limit: int) -> list[dict]:
-    base = "https://www.cybo.com"
-    # Cybo's global search is the most stable surface and is city-aware.
-    url = f"{base}/search/?q={quote(f'{niche} {city} {country}')}&lang=en"
-    html = await _fetch(url)
-    records = _parse_listings(html or "", url)
-    if len(records) < limit:
-        # Per-city directory page sometimes lists more.
-        city_url = f"{base}/PK/{quote(_slug(city))}/{quote(_slug(niche))}/"
-        city_html = await _fetch(city_url)
-        if city_html:
-            city_records = _parse_listings(city_html, city_url)
-            seen = {r["phone"] for r in records}
-            for r in city_records:
-                if r["phone"] not in seen:
-                    seen.add(r["phone"])
+# ---------------------------------------------------------------------------
+# YellowPage.pk — Pakistan. Real server-rendered listing cards:
+# <div class="card listing-card"> containing an <h2><a>NAME</a>, a tel: link
+# and an address span. No email/website on the card, so phone is the contact.
+# ---------------------------------------------------------------------------
+
+_YP_CARD_SPLIT_RE = re.compile(r'(?=<div class="card listing-card)')
+
+
+def _parse_yellowpage_cards(html_text: str) -> list[dict]:
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for card in _YP_CARD_SPLIT_RE.split(html_text or "")[1:]:
+        tel = _TEL_RE.search(card)
+        if not tel:
+            continue
+        phone = html.unescape(tel.group(1)).strip()
+        if len(re.sub(r"\D", "", phone)) < 7:
+            continue
+        name = ""
+        nm = re.search(r"<h2[^>]*>\s*<a[^>]*>(.*?)</a>", card, re.S) or re.search(r"<h2[^>]*>(.*?)</h2>", card, re.S)
+        if nm:
+            name = html.unescape(_clean(nm.group(1)))
+        if not name:
+            continue
+        address = ""
+        am = re.search(r'fa-map-marker-alt[^>]*>\s*</i>\s*<span[^>]*>(.*?)</span>', card, re.S)
+        if am:
+            address = html.unescape(_clean(am.group(1)))
+        key = (name.lower(), phone)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "phone": phone, "email": None, "website": None, "address": address})
+    return out
+
+
+async def _yellowpage_pk(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    base = "https://yellowpage.pk"
+    url = f"{base}/search?skeywords={quote(niche)}"
+    html_text = await _fetch(url)
+    records = _parse_yellowpage_cards(html_text or "")
+    if len(records) < limit and city and country:
+        # City-scoped search when the generic one comes up short.
+        url2 = f"{base}/search?skeywords={quote(niche)}&city={quote(city)}"
+        html2 = await _fetch(url2)
+        if html2:
+            extra = _parse_yellowpage_cards(html2)
+            seen = {(r["name"].lower(), r["phone"]) for r in records}
+            for r in extra:
+                if (r["name"].lower(), r["phone"]) not in seen:
+                    seen.add((r["name"].lower(), r["phone"]))
                     records.append(r)
     return records[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Hotfrog — global (US/UK/etc). Listing cards are plain <li> blocks, and the
+# page embeds `window.mapBubbles = [...]` JSON with structured per-place
+# {name, address, tel} payloads — both are parsed. Search URL shape:
+# /search/{country}/{city}/{keyword} or /search/{country}/{keyword}.
+# ---------------------------------------------------------------------------
+
+_HP_CARD_SPLIT_RE = re.compile(r'(?=<li class="(?:py-3|.*?business))', re.IGNORECASE)
+
+
+def _parse_hotfrog(html_text: str) -> list[dict]:
+    out: list[dict] = []
+    seen: set[tuple] = set()
+
+    # Primary: the embedded mapBubbles JSON (clean, structured, includes tel).
+    m = re.search(r"window\.mapBubbles=(\[.*?\]);", html_text or "", re.S)
+    if m:
+        try:
+            for bubble in json.loads(m.group(1)):
+                h = bubble.get("html", "")
+                nm = re.search(r"<strong>(.*?)</strong>", h)
+                tel = re.search(r'tel:([^"\'<]+)', h)
+                if not nm or not tel:
+                    continue
+                name = html.unescape(_clean(nm.group(1)))
+                phone = html.unescape(tel.group(1)).strip()
+                if not name or len(re.sub(r"\D", "", phone)) < 7:
+                    continue
+                key = (name.lower(), phone)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"name": name, "phone": phone, "email": None, "website": None})
+        except (ValueError, TypeError):
+            pass
+    return out
+
+
+async def _hotfrog(niche: str, city: str, country: str, limit: int) -> list[dict]:
+    base = "https://www.hotfrog.com"
+    cc = _country_code(country)
+    cc_path = cc if cc else "us"
+    city_slug = _slug(city)
+    # /search/us/restaurants and /search/us/new-york/restaurants both work.
+    url = f"{base}/search/{cc_path}/{quote(niche)}"
+    html_text = await _fetch(url)
+    records = _parse_hotfrog(html_text or "")
+    if len(records) < limit and city_slug:
+        url2 = f"{base}/search/{cc_path}/{city_slug}/{quote(niche)}"
+        html2 = await _fetch(url2)
+        if html2:
+            extra = _parse_hotfrog(html2)
+            seen = {(r["name"].lower(), r["phone"]) for r in records}
+            for r in extra:
+                if (r["name"].lower(), r["phone"]) not in seen:
+                    seen.add((r["name"].lower(), r["phone"]))
+                    records.append(r)
+    return records[:limit]
+
+
+def _country_code(country: str) -> str:
+    """Best-effort ISO country code for Hotfrog's per-country path; defaults to
+    the global .com surface when unknown."""
+    lower = (country or "").lower()
+    known = {
+        "pakistan": "pk", "united states": "us", "usa": "us", "america": "us",
+        "united kingdom": "uk", "britain": "uk", "england": "uk",
+        "australia": "au", "canada": "ca", "new zealand": "nz",
+        "united arab emirates": "ae", "uae": "ae", "saudi arabia": "sa",
+        "india": "in", "germany": "de", "france": "fr", "spain": "es",
+        "italy": "it", "netherlands": "nl", "singapore": "sg",
+    }
+    return known.get(lower, "")
 
 
 async def search_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
@@ -249,7 +218,15 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
         return []
     limit = max(1, min(limit, 100))
 
-    sources = [_yellowpages_pk, _cybo]
+    sources = [
+        _yellowpage_pk, _hotfrog,
+    ]
+    # Country-aware sourcing: YellowPage.pk only covers Pakistan; Hotfrog covers
+    # the US/UK/etc. Run only the relevant ones so a Pakistan search isn't
+    # flooded with Pakistan records for a US city (or vice versa).
+    country_lower = (country or "").lower()
+    if country_lower and "pakistan" not in country_lower and "pk" != country_lower.strip():
+        sources = [_hotfrog]
     records: list[dict] = []
     by_phone: dict[str, dict] = {}
 
@@ -284,4 +261,5 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
             break
 
     _breaker.record_success()
+    source_tracker.record_success("directory")
     return records

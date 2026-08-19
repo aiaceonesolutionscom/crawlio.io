@@ -32,14 +32,15 @@ OVERPASS_MIRRORS = [
     "https://overpass.osm.ch/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
 
-DEFAULT_RADIUS_METERS = 25_000
+DEFAULT_RADIUS_METERS = 15_000
 # Overpass server-side query timeout, in seconds. Kept modest — the mirrors
 # are raced concurrently, so total worst-case wait is ~this, not 5x this.
-OVERPASS_TIMEOUT_SECONDS = 20
-OVERPASS_HTTP_TIMEOUT = 25.0
+OVERPASS_TIMEOUT_SECONDS = 12
+OVERPASS_HTTP_TIMEOUT = 15.0
 # The public Overpass instances 406 any User-Agent that doesn't look like
 # curl's own default (confirmed empirically). Overpass has no documented UA
 # requirement unlike Nominatim, so this just mirrors whatever their edge/WAF
@@ -107,12 +108,15 @@ def _parse_elements(elements: list[dict], city_en: str, industry: str) -> list[d
     for el in elements:
         tags = el.get("tags", {})
         # Prefer the English name tag when a mapper set one — OSM contributors
-        # can tag "name" in the local script (e.g. Urdu). The final quality gate
-        # (lead_validator) still filters on real contact channels, so a name in
-        # the local script is kept rather than dropped: it's still a real,
-        # findable business.
+        # can tag "name" in the local script (e.g. Urdu), and results must
+        # stay in English throughout.
         name = tags.get("name:en") or tags.get("name")
         if not name:
+            continue
+        # If there's no name:en and the raw name isn't Latin script, there's
+        # no reliable English rendering — drop it rather than show a name in
+        # a script the user can't read.
+        if not _is_latin_script(name):
             continue
 
         center = el.get("center") or {"lat": el.get("lat"), "lon": el.get("lon")}
@@ -131,11 +135,8 @@ def _parse_elements(elements: list[dict], city_en: str, industry: str) -> list[d
         phone = tags.get("phone") or tags.get("contact:phone")
         email = tags.get("email") or tags.get("contact:email")
 
-        # A result with nothing but a name and a bare city tag isn't an
-        # actionable lead on its own, but the final validator (which requires a
-        # phone/email/website) is the real quality gate — so accept anything
-        # that carries an address detail too, and let validation decide.
-        if not (phone or email or website or street_line or tags.get("addr:city")):
+        # A result with nothing but a name isn't an actionable lead.
+        if not (phone or email or website or street_line):
             continue
 
         dedup_key = (name.lower(), phone or "", website or "")
@@ -168,59 +169,55 @@ async def _run_overpass_query(query: str) -> list[dict]:
     """Fires all mirrors at once and returns as soon as one comes back with
     actual results, instead of trying them one at a time — a sequential
     fallback across 5 mirrors could take 5x the per-mirror timeout before
-    giving up, far too slow for an interactive search. Never raises: on total
-    mirror failure, logs and returns an empty list so this source can never
-    block or fail the overall discovery search."""
+    giving up, far too slow for an interactive search. Retried once after a
+    short pause when every mirror fails or returns nothing, because the public
+    mirrors are flaky under load (504/429) and a single instant can collapse
+    an entire search to directory-only results. Never raises: on total mirror
+    failure, logs and returns an empty list so this source can never block or
+    fail the overall discovery search."""
     empty_result: Optional[list[dict]] = None
     async with httpx.AsyncClient(timeout=OVERPASS_HTTP_TIMEOUT, headers=OVERPASS_HEADERS) as client:
-        tasks = {
-            asyncio.create_task(_query_one_mirror(client, mirror, query)): mirror
-            for mirror in OVERPASS_MIRRORS
-        }
-        pending = set(tasks)
-        try:
-            while pending:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    try:
-                        result = task.result()
-                    except (httpx.HTTPError, ValueError) as exc:
-                        logger.warning("Overpass mirror %s failed: %s", tasks[task], exc)
-                        continue
-                    if result:
-                        return result
-                    empty_result = result
-        finally:
-            # With FIRST_COMPLETED, `done` can hold several mirrors that
-            # finished in the same event-loop tick; if the first one we touch
-            # returns results, the rest of `done` never gets processed. And a
-            # mirror can complete right as we return. Either way those tasks'
-            # exceptions would otherwise surface as "Task exception was never
-            # retrieved" at GC time — so cancel anything still running and
-            # retrieve every task's result silently.
-            for task in tasks:
-                if not task.done():
+        for attempt in range(2):
+            tasks = {
+                asyncio.create_task(_query_one_mirror(client, mirror, query)): mirror
+                for mirror in OVERPASS_MIRRORS
+            }
+            pending = set(tasks)
+            try:
+                while pending:
+                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        try:
+                            result = task.result()
+                        except (httpx.HTTPError, ValueError) as exc:
+                            logger.warning("Overpass mirror %s failed: %s", tasks[task], exc)
+                            continue
+                        if result:
+                            return result
+                        empty_result = result
+            finally:
+                for task in pending:
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            if attempt == 0:
+                await asyncio.sleep(1.0)
 
     return empty_result if empty_result is not None else []
 
 
-async def discover_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
+async def discover_businesses(niche: str, city: str, country: str, limit: int = 50, wider_radius: bool = False) -> list[dict]:
     """Additive OSM/Overpass discovery source. Geocodes city+country to a
     center point (reusing geocoding_service's rate-limited/cached Nominatim
     client), then queries Overpass around that point. Best-effort throughout:
     returns [] rather than raising on any failure (geocode miss, all mirrors
-    down, empty result) so it never blocks the overall discovery search."""
+    down, empty result) so it never blocks the overall discovery search.
+
+    When ``wider_radius=True`` the search uses progressively larger search
+    radii (100km → 250km) to catch businesses further out — used by the
+    discovery-service retry pass when a primary-city scrape came up short."""
     if limit < 1:
         return []
 
     center = await geocoding_service.geocode(f"{city}, {country}")
-    if not center:
-        # Some cities resolve more reliably on their own (Nominatim can be picky
-        # about how a country name is rendered); try the bare city before giving
-        # up on this source for the whole search.
-        center = await geocoding_service.geocode(city)
     if not center:
         logger.info("Overpass discovery skipped for %s, %s: geocoding failed", city, country)
         return []
@@ -228,14 +225,10 @@ async def discover_businesses(niche: str, city: str, country: str, limit: int = 
     tags, matched = resolve_niche_tags(niche)
     industry = niche.strip().title()
 
-    # A 25km radius plausibly won't hold `limit` real matches for a niche
-    # business type — widen once if the first pass came up short, instead of
-    # silently handing back whatever the smallest radius found. Capped at two
-    # tiers total: each round already races 5 mirrors, so more tiers mainly
-    # adds latency (and more 429s against free mirrors) rather than more
-    # results — OSM's actual coverage for a niche+city is often the real
-    # ceiling, not the radius.
-    radii = [DEFAULT_RADIUS_METERS, 80_000]
+    # Standard radii: 15km -> 50km for a normal search. When wider_radius is
+    # requested (retry pass), push out to 100km -> 250km to catch businesses
+    # on the outskirts that the default tiers miss.
+    radii = [100_000, 250_000, 400_000] if wider_radius else [DEFAULT_RADIUS_METERS, 50_000]
     collected: list[dict] = []
     seen_keys: set[tuple] = set()
 

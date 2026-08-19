@@ -150,7 +150,7 @@ async def enrich_leads(
                     country_code=None,
                     use_browser=enhanced,
                     use_ai=enhanced,
-                    use_google_maps=enhanced,
+                    use_google_maps=True,
                 )
 
         outcomes = await asyncio.gather(*(_enrich_one(lead) for lead in fallback_leads), return_exceptions=True)

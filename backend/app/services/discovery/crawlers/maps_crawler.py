@@ -29,57 +29,84 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from app.core.config import settings
-from app.core.integration_runtime import api_key
-from app.services.discovery.crawlers.base import CircuitBreaker
+from app.services.discovery.crawlers.base import CircuitBreaker, ProxyRotator, source_tracker, source_tracker
 
 logger = logging.getLogger(__name__)
 
-NAV_TIMEOUT_MS = 15_000
+NAV_TIMEOUT_MS = 10_000
 FEED_WAIT_MS = 6_000
-SETTLE_MS = 500
+SETTLE_MS = 700
 # How many times we scroll the result feed before giving up on loading more.
 MAX_SCROLLS = 24
 # Concurrent place-page visits — bounded so a large request (e.g. 50 leads)
 # finishes in reasonable wall-clock time without firing every navigation at
 # once. Same total request volume as doing it sequentially, just parallelized
 # within one browser context (the same technique Apify's own actor uses).
-_PLACE_CONCURRENCY = 10
+_PLACE_CONCURRENCY = 6
 # Chromium build name for error diagnostics.
 _CHROMIUM_HINT = "run `playwright install chromium`"
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
+# A pool of realistic desktop Chrome user agents, rotated per crawl session so
+# Google's fingerprint scoring sees a varied client identity rather than one
+# fixed UA hammering from many IPs.
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Edg/124.0",
+]
+# Locales that match a session's proxy country when the pool is geo-targeted;
+# keep en-PK as the conservative default so behavior stays predictable.
+_LOCALES = ["en-PK", "en-US", "en-GB"]
 
 # Google Maps blocks automation aggressively and a block tends to outlast a short
 # cooldown, so the cooldown is long and the failure threshold low.
 _breaker = CircuitBreaker(name="google-maps", failure_threshold=2, cooldown_seconds=600.0)
+# Residential proxy pool — Google Maps is the one source that needs real
+# residential IPs to stay unblocked at volume; empty pool = direct connection.
+_proxy_rotator = ProxyRotator(settings.residential_proxy_list, name="google-maps-proxy")
 
-# Anti-automation flags: these reduce (not eliminate) Google's headless
-# fingerprinting. A residential proxy (PROXY_URL) is the reliable answer at
-# volume — see settings.proxy_url.
-_CHROMIUM_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-]
 
-# Markers that mean Google served an anti-bot / consent wall instead of results.
-_BLOCK_HINTS = (
+# Signatures that mean "we are blocked", not "there are no results". Detected on
+# the page/URL before we conclude the feed is empty, so we rotate + cooldown
+# instead of mis-reporting a block as a zero-result search.
+_CAPTCHA_MARKERS = (
     "unusual traffic",
-    "verify you are human",
-    "are you a robot",
+    "our systems have detected",
+    "recaptcha",
+    "g-recaptcha",
+    "captcha",
+    "enable javascript and cookies to continue",
     "not a robot",
-    "enable cookies",
-    "before you continue to google",
+    "/sorry/",
 )
 
-# Feed containers, newest first. The primary surface is div[role="feed"]; when
-# Google changes its DOM (or serves a degraded page) we fall back to scanning
-# any place links under the main region so a markup change doesn't zero out the
-# whole source.
-_FEED_SELECTORS = ('div[role="feed"]', 'div[role="main"]', "body")
+
+def _looks_blocked(page_url: str, html_sample: str) -> bool:
+    haystack = f"{page_url or ''} {html_sample or ''}".lower()
+    return any(marker in haystack for marker in _CAPTCHA_MARKERS)
+
+
+def _pick_user_agent() -> str:
+    return random.choice(USER_AGENTS)
+
+
+def _pick_locale() -> str:
+    return random.choice(_LOCALES)
+
+
+# Timezone that matches the session locale so the browser fingerprint is
+# internally consistent (Google scores mismatched locale/timezone signals).
+_TIMEZONES_BY_LOCALE = {
+    "en-PK": "Asia/Karachi",
+    "en-US": "America/New_York",
+    "en-GB": "Europe/London",
+}
+
+
+def _pick_timezone(locale: str) -> str:
+    return _TIMEZONES_BY_LOCALE.get(locale, "Asia/Karachi")
 
 
 def _query_url(niche: str, city: str, country: str) -> str:
@@ -148,17 +175,13 @@ def _parse_card(text: str) -> dict:
 
 async def _collect_feed_links(page, limit: int) -> list[dict]:
     """Scroll the result feed until we've collected `limit` unique place links
-    (or hit MAX_SCROLLS). Falls back to scanning place anchors under the main
-    region when the primary feed container isn't in the DOM (markup change /
-    degraded page). Returns [{name, rating, review_count, category, url,
+    (or hit MAX_SCROLLS). Returns [{name, rating, review_count, category, url,
     lat, lon}]."""
     links: list[dict] = []
     seen_urls: set[str] = set()
 
-    async def _scan(container_selector: str) -> None:
-        anchors = await page.query_selector_all(
-            f'{container_selector} a[href*="/maps/place/"]'
-        )
+    async def _scan() -> None:
+        anchors = await page.query_selector_all('div[role="feed"] a[href*="/maps/place/"]')
         for a in anchors:
             try:
                 href = await a.get_attribute("href")
@@ -184,19 +207,11 @@ async def _collect_feed_links(page, limit: int) -> list[dict]:
             if len(links) >= limit:
                 return
 
-    feed = None
-    for selector in _FEED_SELECTORS:
-        feed = await page.query_selector(selector)
-        if feed is not None:
-            break
+    feed = await page.query_selector('div[role="feed"]')
     if feed is None:
         return []
 
-    await _scan(selector)
-    # Only the real feed container scrolls; fallback containers are scanned once.
-    if selector != 'div[role="feed"]':
-        return links[:limit]
-
+    await _scan()
     for _ in range(MAX_SCROLLS):
         if len(links) >= limit:
             break
@@ -206,31 +221,12 @@ async def _collect_feed_links(page, limit: int) -> list[dict]:
         except PlaywrightError:
             break
         await page.wait_for_timeout(random.randint(700, 1400))
-        await _scan(selector)
+        await _scan()
         # Nothing new loaded — the feed is exhausted.
         if len(links) == before:
             break
 
     return links[:limit]
-
-
-async def _page_blocked(page) -> Optional[str]:
-    """Return the matched anti-bot/consent marker when Google served a wall
-    instead of results, else None. Used to log the real reason a crawl came up
-    empty and to skip a doomed retry."""
-    text = ""
-    try:
-        text = await page.content()
-    except Exception:  # PlaywrightError or test doubles without page.content()
-        try:
-            text = await page.inner_text("body")
-        except Exception:
-            return None
-    text = re.sub(r"\s+", " ", text or "").lower()
-    for hint in _BLOCK_HINTS:
-        if hint in text:
-            return hint
-    return None
 
 
 async def _extract_panel(page, known_name: str) -> dict:
@@ -366,176 +362,261 @@ async def _scrape_place(context, card: dict) -> dict:
     return record
 
 
-async def _handle_consent(page) -> None:
-    """Best-effort dismissal of Google's consent/cookie wall ("Before you
-    continue to Google…"). Never raises."""
-    try:
-        btn = await page.query_selector(
-            'button[aria-label*="Reject all"], button[aria-label*="Accept all"]'
-        )
-        if btn is None:
-            btn = await page.query_selector('button:has-text("Accept all"), button:has-text("Reject all")')
-        if btn is not None:
-            await btn.click()
-            await page.wait_for_timeout(600)
-    except PlaywrightError:
-        pass
-
-
-async def _search_businesses_once(
-    page, url: str, niche: str, city: str, limit: int
-) -> tuple[list[dict], Optional[str]]:
-    """One navigation + feed-collect attempt. Returns (links, block_hint) —
-    block_hint is set (and links empty) only when Google served an anti-bot
-    wall, which means a retry is pointless."""
-    try:
-        await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(SETTLE_MS)
-    except PlaywrightError as exc:
-        logger.warning("Google Maps navigation failed for %s in %s: %s", niche, city, exc)
-        return [], None
-
-    hint = await _page_blocked(page)
-    if hint:
-        return [], hint
-
-    await _handle_consent(page)
-    try:
-        await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
-    except PlaywrightError:
-        pass  # degraded page → the fallback scan in _collect_feed_links still runs
-
-    links = await _collect_feed_links(page, limit)
-    return links, None
-
-
-async def _crawl_once(niche: str, city: str, country: str, limit: int) -> list[dict]:
-    """One full crawl attempt: launch chromium, search the feed, scrape each
-    place panel. Returns [] on any failure — never raises. Callers retry on
-    transient failures (browser crash, network blip) before giving up."""
-    url = _query_url(niche, city, country)
-    records: list[dict] = []
-
-    async with async_playwright() as p:
-        launch_kwargs = {"headless": settings.google_maps_headless, "args": _CHROMIUM_ARGS}
-        if api_key("proxy_url"):
-            launch_kwargs["proxy"] = {"server": api_key("proxy_url")}
-        try:
-            browser = await p.chromium.launch(**launch_kwargs)
-        except PlaywrightError as exc:
-            logger.warning("Google Maps crawler could not launch chromium: %s (%s)", exc, _CHROMIUM_HINT)
-            return []
-        try:
-            context = await browser.new_context(
-                user_agent=USER_AGENT,
-                locale="en-PK",
-                viewport={"width": 1280, "height": 900},
-            )
-            try:
-                await context.add_init_script(
-                    "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-                )
-            except (AttributeError, PlaywrightError):  # test doubles / older context
-                pass
-            try:
-                page = await context.new_page()
-                try:
-                    feed, hint = await _search_businesses_once(page, url, niche, city, limit)
-                    if hint:
-                        logger.warning(
-                            "Google Maps blocked for %s in %s (hint: %r) — run headful or set PROXY_URL",
-                            niche, city, hint,
-                        )
-                        return []
-                    if not feed:
-                        logger.info("Google Maps empty on first attempt for %s in %s — retrying", niche, city)
-                        feed, hint = await _search_businesses_once(page, url, niche, city, limit)
-                        if hint:
-                            logger.warning(
-                                "Google Maps blocked for %s in %s (hint: %r) — run headful or set PROXY_URL",
-                                niche, city, hint,
-                            )
-                            return []
-                except PlaywrightError as exc:
-                    logger.warning("Google Maps feed not found for %s in %s: %s", niche, city, exc)
-                    return []
-
-                if not feed:
-                    try:
-                        title = (await page.title()).strip() or page.url
-                    except PlaywrightError:
-                        title = page.url
-                    logger.warning(
-                        "Google Maps feed not found for %s in %s (page: %s)",
-                        niche, city, title,
-                    )
-                    return []
-
-                # Panel details per place, bounded by the requested limit.
-                panel_limit = max(1, min(len(feed), settings.google_maps_search_limit, limit))
-                semaphore = asyncio.Semaphore(_PLACE_CONCURRENCY)
-
-                async def _scrape_one(card: dict) -> Optional[dict]:
-                    async with semaphore:
-                        await _human_pause(0.6, 1.8)
-                        record = await _scrape_place(context, card)
-                        if record.get("name"):
-                            record.setdefault("source", "google_maps")
-                            return record
-                        return None
-
-                scraped = await asyncio.gather(*(_scrape_one(card) for card in feed[:panel_limit]))
-                records = [r for r in scraped if r is not None]
-            finally:
-                await page.close()
-        finally:
-            await browser.close()
-
-    return records
-
-
 async def search_businesses(niche: str, city: str, country: str, limit: int = 50) -> list[dict]:
     """Search Google Maps for a niche in a city and return real place records.
 
     Returns [] on any failure/block (never raises) so the orchestrator can fall
-    back to other free sources. Transient failures (browser crash, connection
-    drop mid-crawl) are retried once; only a second consecutive failure trips
-    the circuit breaker. An empty-but-unblocked result (thin market, genuinely
-    no listings) is NOT retried — that's a real answer, not a transient error.
+    back to other free sources.
     """
     if _breaker.open:
         logger.warning("Google Maps circuit open — skipping crawl")
         return []
     limit = max(1, min(limit, settings.google_maps_max_results))
+    url = _query_url(niche, city, country)
+    records: list[dict] = []
 
-    retryable = False
+    # Pick a residential proxy for this crawl session (sticky across the whole
+    # crawl so Google doesn't see mid-session IP churn); None = direct.
+    proxy = await _proxy_rotator.get(sticky_key=f"maps:{niche}:{city}")
+    user_agent = _pick_user_agent()
+    locale = _pick_locale()
+
     try:
-        records = await _crawl_once(niche, city, country, limit)
+        async with async_playwright() as p:
+            kwargs = {"headless": settings.google_maps_headless}
+            if proxy:
+                kwargs["proxy"] = {"server": proxy}
+            try:
+                browser = await p.chromium.launch(**kwargs)
+            except PlaywrightError as exc:
+                logger.warning("Google Maps crawler could not launch chromium: %s (%s)", exc, _CHROMIUM_HINT)
+                return []
+            try:
+                context = await browser.new_context(
+                    user_agent=user_agent,
+                    locale=locale,
+                    viewport={"width": 1280, "height": 900},
+                    timezone_id=_pick_timezone(locale),
+                )
+                # Bandwidth optimization: block images/fonts/media/styles so the
+                # heavy Maps page loads much faster and consumes far less proxy
+                # bandwidth — we only need the DOM text, never the pixels.
+                try:
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
+                            else route.continue_()
+                        ),
+                    )
+                except (PlaywrightError, AttributeError):
+                    pass
+                try:
+                    page = await context.new_page()
+                    try:
+                        await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+                        # Google may show a consent/captcha wall — wait for the
+                        # result feed to actually render before deciding.
+                        await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
+                    except PlaywrightError as exc:
+                        # Distinguish a genuine block (captcha/unusual-traffic)
+                        # from a normal zero-result search so we rotate + back
+                        # off instead of silently reporting "no results".
+                        try:
+                            html_sample = await page.content()
+                        except PlaywrightError:
+                            html_sample = ""
+                        if _looks_blocked(page.url, html_sample):
+                            logger.warning(
+                                "Google Maps appears blocked for %s in %s (proxy=%s): %s",
+                                niche, city, proxy, exc,
+                            )
+                            _breaker.record_failure()
+                            source_tracker.record_failure("google_maps")
+                            _proxy_rotator.mark_failure(proxy)
+                            return []
+                        logger.warning("Google Maps feed not found for %s in %s: %s", niche, city, exc)
+                        return []
+
+                    feed = await _collect_feed_links(page, limit)
+                    if not feed:
+                        try:
+                            html_sample = await page.content()
+                        except PlaywrightError:
+                            html_sample = ""
+                        if _looks_blocked(page.url, html_sample):
+                            logger.warning(
+                                "Google Maps returned a block wall for %s in %s (proxy=%s)",
+                                niche, city, proxy,
+                            )
+                            _breaker.record_failure()
+                            source_tracker.record_failure("google_maps")
+                            _proxy_rotator.mark_failure(proxy)
+                            return []
+                        logger.info("Google Maps found no results for %s in %s", niche, city)
+                        return []
+
+                    # Panel details per place, bounded by the requested limit.
+                    panel_limit = max(1, min(len(feed), settings.google_maps_search_limit, limit))
+                    semaphore = asyncio.Semaphore(_PLACE_CONCURRENCY)
+
+                    async def _scrape_one(card: dict) -> Optional[dict]:
+                        async with semaphore:
+                            await _human_pause(0.6, 1.8)
+                            record = await _scrape_place(context, card)
+                            if record.get("name"):
+                                record.setdefault("source", "google_maps")
+                                return record
+                            return None
+
+                    scraped = await asyncio.gather(*(_scrape_one(card) for card in feed[:panel_limit]))
+                    records = [r for r in scraped if r is not None]
+                finally:
+                    await page.close()
+            finally:
+                await browser.close()
     except PlaywrightError as exc:
         logger.warning("Google Maps crawler failed for %s in %s: %s", niche, city, exc)
-        retryable = True
-        records = []
+        _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
+        return []
     except Exception as exc:
         logger.warning("Google Maps crawler failed unexpectedly for %s in %s: %s", niche, city, exc)
-        retryable = True
-        records = []
-
-    if retryable:
-        # Browser crash ("Connection closed while reading from the driver") and
-        # network blips are common and transient — retry the whole crawl once.
-        await asyncio.sleep(1.5)
-        logger.info("Google Maps crawl retry for %s in %s", niche, city)
-        try:
-            records = await _crawl_once(niche, city, country, limit)
-        except Exception as exc:
-            logger.warning("Google Maps crawler failed on retry for %s in %s: %s", niche, city, exc)
-            records = []
-
-    # Only a real failure (exception/crash) trips the breaker; a thin market or
-    # a blocked-but-still-returning crawl is just an empty answer.
-    if retryable and not records:
         _breaker.record_failure()
-    elif records:
-        _breaker.record_success()
+        source_tracker.record_failure("google_maps")
+        return []
+
+    _breaker.record_success()
+    source_tracker.record_success("google_maps")
+    _proxy_rotator.mark_success(proxy)
     logger.info("Google Maps crawl for %s in %s returned %d records", niche, city, len(records))
     return records
+
+
+# Token-based name similarity used to pick the right place panel when we look
+# a business up by name: the feed often contains nearby look-alike listings, so
+# we only trust a match whose name shares enough words with the query.
+def _name_tokens(name: str) -> set[str]:
+    return {t.lower() for t in re.findall(r"[a-z0-9]+", name or "") if len(t) > 1}
+
+
+def _name_similarity(query: str, candidate: str) -> float:
+    q = _name_tokens(query)
+    c = _name_tokens(candidate)
+    if not q or not c:
+        return 0.0
+    return len(q & c) / max(len(q), len(c))
+
+
+async def lookup_business_by_name(name: str, city: str, country: str) -> Optional[dict]:
+    """Targeted Google Maps lookup for ONE business by its exact name (the
+    "GBP panel" path used during enrichment, when a lead from OSM/directories
+    has a name+address but no phone/website).
+
+    Returns the matching place record (phone/website/address/hours/rating) or
+    None on failure/block/no-confident-match. Never raises.
+
+    Shares the search_businesses crawl machinery (feed -> panel scrape) but
+    reuses the business NAME as the query instead of a niche keyword, so a
+    business that Google's ranking feed buried for a generic niche search is
+    still found when asked for directly."""
+    if _breaker.open:
+        logger.warning("Google Maps lookup skipped — circuit open")
+        return None
+    if not name:
+        return None
+    name = name.strip()
+    url = _query_url(name, city, country)
+
+    proxy = await _proxy_rotator.get(sticky_key=f"maps-lookup:{name}:{city}")
+    user_agent = _pick_user_agent()
+    locale = _pick_locale()
+
+    try:
+        async with async_playwright() as p:
+            kwargs = {"headless": settings.google_maps_headless}
+            if proxy:
+                kwargs["proxy"] = {"server": proxy}
+            try:
+                browser = await p.chromium.launch(**kwargs)
+            except PlaywrightError as exc:
+                logger.warning("Google Maps lookup could not launch chromium: %s (%s)", exc, _CHROMIUM_HINT)
+                return None
+            try:
+                context = await browser.new_context(
+                    user_agent=user_agent,
+                    locale=locale,
+                    viewport={"width": 1280, "height": 900},
+                    timezone_id=_pick_timezone(locale),
+                )
+                try:
+                    await context.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
+                            else route.continue_()
+                        ),
+                    )
+                except (PlaywrightError, AttributeError):
+                    pass
+                try:
+                    page = await context.new_page()
+                    try:
+                        await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+                        await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
+                    except PlaywrightError as exc:
+                        try:
+                            html_sample = await page.content()
+                        except PlaywrightError:
+                            html_sample = ""
+                        if _looks_blocked(page.url, html_sample):
+                            logger.warning("Google Maps lookup appears blocked for %s (proxy=%s): %s", name, proxy, exc)
+                            _breaker.record_failure()
+                            source_tracker.record_failure("google_maps")
+                            _proxy_rotator.mark_failure(proxy)
+                            return None
+                        logger.warning("Google Maps lookup feed not found for %s: %s", name, exc)
+                        return None
+
+                    feed = await _collect_feed_links(page, limit=5)
+                    if not feed:
+                        return None
+
+                    # Pick the candidate whose name best matches the query; only
+                    # trust it when the overlap is strong enough to be the same
+                    # business rather than a look-alike listing.
+                    best_card = max(feed, key=lambda c: _name_similarity(name, c.get("name") or ""))
+                    if _name_similarity(name, best_card.get("name") or "") < 0.4:
+                        logger.info(
+                            "Google Maps lookup: no confident name match for %r (best: %r)",
+                            name, best_card.get("name") or "",
+                        )
+                        return None
+
+                    record = await _scrape_place(context, best_card)
+                    if record.get("name"):
+                        record.setdefault("source", "google_maps")
+                        _breaker.record_success()
+                        source_tracker.record_success("google_maps")
+                        _proxy_rotator.mark_success(proxy)
+                        logger.info("Google Maps lookup for %r returned a match", name)
+                        return record
+                    return None
+                finally:
+                    await page.close()
+            finally:
+                await browser.close()
+    except PlaywrightError as exc:
+        logger.warning("Google Maps lookup failed for %s: %s", name, exc)
+        _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
+        return None
+    except Exception as exc:
+        logger.warning("Google Maps lookup failed unexpectedly for %s: %s", name, exc)
+        _breaker.record_failure()
+        source_tracker.record_failure("google_maps")
+        return None
+
+    return None

@@ -70,10 +70,21 @@ class Settings(BaseSettings):
     google_maps_delay_seconds: float = 1.5
     google_maps_search_limit: int = 50
     proxy_url: str = ""
+    # Rotating residential proxy pool (anti-bot for Google Maps). Comma-separated
+    # proxy URLs — used only by sources that need residential IPs (Google Maps).
+    residential_proxy_list: list[str] = []
+    # Optional secondary proxy list for non-Maps HTTP crawlers (directories,
+    # Bing). Empty = direct connection.
+    http_proxy_list: list[str] = []
+    # Per-source proxy cooldown (seconds) after a block/429 before a proxy is
+    # tried again.
+    proxy_cooldown_seconds: int = 300
     directory_enabled: bool = True
+    bing_maps_enabled: bool = False
+    bizdata_enabled: bool = True
     geoapify_api_key: str = ""
     geoapify_enabled: bool = True
-    validate_emails: bool = False
+    validate_emails: bool = True
 
     tavily_api_key: str = ""
     tavily_enabled: bool = True

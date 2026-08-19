@@ -120,3 +120,102 @@ async def test_batch_result_matches_single_item_enrich(monkeypatch):
     assert single["email"] == batch[0]["email"] == "info@sakura.pk"
     assert single["hours"] == batch[0]["hours"] == "9-5"
     assert single["enrichment_status"] == batch[0]["enrichment_status"] == "done"
+
+
+async def test_batch_maps_lookup_fills_phone_for_name_only_lead(monkeypatch):
+    """A name-only OSM lead (no phone/website) gets its real GBP panel data via
+    the Google Maps name-lookup when use_google_maps=True."""
+    calls = []
+
+    async def fake_lookup(name, city, country):
+        calls.append(name)
+        assert city == "Karachi" and country == "Pakistan"
+        return {
+            "name": name,
+            "phone": "+92 21 32224110",
+            "website": "https://alnoor.pk",
+            "address": "Pardesi Heights, Shah Abdul Latif Rd, Karachi",
+            "hours": "Open · Closes 8 PM",
+            "rating": 4.4,
+        }
+
+    monkeypatch.setattr(enrichment_pipeline.maps_crawler, "lookup_business_by_name", fake_lookup)
+    monkeypatch.setattr(enrichment_pipeline, "validate_email", lambda e: e)
+    monkeypatch.setattr(enrichment_pipeline.geocoding_service, "geocode_business", lambda *a, **k: None)
+
+    items = [{"name": "Sabah Al-Noor Medical Centre", "lat": 24.9, "lon": 67.05}]
+    results = await enrichment_pipeline.enrich_items_batch(
+        items, city="Karachi", country="Pakistan", country_code="PK",
+        use_browser=False, use_google_maps=True,
+    )
+
+    assert calls == ["Sabah Al-Noor Medical Centre"]
+    assert results[0]["phone"] == "+92 21 32224110"
+    assert results[0]["website"] == "https://alnoor.pk"
+    assert "google_maps" in results[0]["enrichment_source"]
+    assert results[0]["enrichment_status"] == "done"
+
+
+async def test_batch_skips_maps_lookup_when_lead_has_phone(monkeypatch):
+    """Leads that already carry a phone/website don't burn a Maps lookup."""
+    calls = []
+
+    async def fake_lookup(name, city, country):
+        calls.append(name)
+        return {"phone": "+92 21 5555555"}
+
+    monkeypatch.setattr(enrichment_pipeline.maps_crawler, "lookup_business_by_name", fake_lookup)
+    monkeypatch.setattr(enrichment_pipeline, "validate_email", lambda e: e)
+    monkeypatch.setattr(enrichment_pipeline.geocoding_service, "geocode_business", lambda *a, **k: None)
+
+    items = [
+        {"name": "Has Phone Co", "phone": "+92 300 1111111", "lat": 1, "lon": 1},
+        {"name": "Needs Lookup Co", "lat": 1, "lon": 1},
+    ]
+    await enrichment_pipeline.enrich_items_batch(
+        items, city="Karachi", country="Pakistan", country_code="PK",
+        use_browser=False, use_google_maps=True,
+    )
+
+    assert calls == ["Needs Lookup Co"]
+
+
+async def test_batch_maps_lookup_off_by_default(monkeypatch):
+    """use_google_maps defaults to False, so no Maps crawler traffic fires
+    unless the caller opts in."""
+    calls = []
+
+    async def fake_lookup(name, city, country):
+        calls.append(name)
+        return {"phone": "+92 21 1111111"}
+
+    monkeypatch.setattr(enrichment_pipeline.maps_crawler, "lookup_business_by_name", fake_lookup)
+    monkeypatch.setattr(enrichment_pipeline, "validate_email", lambda e: e)
+    monkeypatch.setattr(enrichment_pipeline.geocoding_service, "geocode_business", lambda *a, **k: None)
+
+    items = [{"name": "Name Only Co", "lat": 1, "lon": 1}]
+    await enrichment_pipeline.enrich_items_batch(
+        items, city="Karachi", country="Pakistan", country_code="PK", use_browser=False,
+    )
+
+    assert calls == []
+
+
+async def test_batch_maps_lookup_survives_lookup_failure(monkeypatch):
+    """A failed Maps lookup degrades gracefully (lead stays name-only) instead
+    of crashing the whole batch."""
+    async def failing_lookup(name, city, country):
+        raise RuntimeError("blocked")
+
+    monkeypatch.setattr(enrichment_pipeline.maps_crawler, "lookup_business_by_name", failing_lookup)
+    monkeypatch.setattr(enrichment_pipeline, "validate_email", lambda e: e)
+    monkeypatch.setattr(enrichment_pipeline.geocoding_service, "geocode_business", lambda *a, **k: None)
+
+    items = [{"name": "Name Only Co", "lat": 1, "lon": 1}]
+    results = await enrichment_pipeline.enrich_items_batch(
+        items, city="Karachi", country="Pakistan", country_code="PK",
+        use_browser=False, use_google_maps=True,
+    )
+
+    assert results[0]["enrichment_status"] == "done"
+    assert results[0].get("phone") is None

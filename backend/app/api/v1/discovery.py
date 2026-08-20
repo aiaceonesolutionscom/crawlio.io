@@ -22,11 +22,15 @@ from app.schemas.discovery import (
 )
 from app.schemas.lead import LeadCreate, lead_to_read
 from app.services.discovery import discovery_cache_service, discovery_service, geo_service
+from app.services.discovery.discovery_safety import (
+    discovery_breaker,
+    enforce_minimum_results,
+    filter_incomplete_leads,
+    recovery_trigger,
+)
 from app.services.enrichment import enrichment_jobs
 from app.services.lead.lead_service import DuplicateLeadError, create_lead, find_existing_emails_and_phones
-
 from app.services.workspace.quota_service import count_discovery_leads_today
-
 from app.workers.tasks_enrichment import _enrich_batch_async
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,8 @@ router = APIRouter(prefix="/leads/discover", tags=["lead-discovery"])
 # multiplier just makes the backend chase leads that get discarded by the
 # results[:limit] truncation below anyway.
 FREE_TIER_OVERFETCH_MULTIPLIER = 1.2
+# Minimum acceptable results before we consider a search degraded
+MINIMUM_ACCEPTABLE_RESULTS = 5
 
 
 @router.get("/niches")
@@ -87,21 +93,48 @@ async def discover(
     # search from any workspace reuses a prior validated scrape instead of
     # re-hitting Google Maps/OSM/directories, which is what makes serving many
     # workspaces' worth of daily volume affordable on free infrastructure.
-    cache_hit = await discovery_cache_service.get_cached(session, payload.niche, payload.city, payload.country)
+    #
+    # SAFETY LAYER: CacheQualityValidator integrated in get_cached() will reject
+    # stale/partial entries (e.g. 1-result caches from yesterday's bug)
+    cache_hit = await discovery_cache_service.get_cached(
+        session, payload.niche, payload.city, payload.country, requested_limit=limit
+    )
     if cache_hit:
         cached_items, cached_at = cache_hit
+        # SAFETY CHECK: Even with cache hit, verify minimum threshold
         if len(cached_items) >= limit:
             cached_at_str = cached_at.isoformat() if cached_at else None
             sliced = [dict(r) for r in cached_items[:limit]]
             await _mark_already_in_workspace(session, workspace.id, sliced)
+
+            # SAFETY LAYER: Filter incomplete leads before serving from cache
+            sliced = filter_incomplete_leads(sliced)
+
             items = [
                 DiscoveredLead(**{**r, "cache_hit": True, "cached_at": cached_at_str})
                 for r in sliced
             ]
+
+            # SAFETY LAYER: Circuit breaker evaluation
+            is_good, _ = discovery_breaker.evaluate_search(limit, len(items))
+
             return DiscoverResponse(
                 items=items, total=len(items), limit=limit, enhanced=enhanced,
                 daily_limit=daily_limit, remaining_today=remaining_today, search_id=None,
             )
+        else:
+            logger.info(
+                "Cache hit but under-delivered (%d < %d), proceeding to fresh discovery",
+                len(cached_items), limit,
+            )
+
+    # SAFETY LAYER: Check if circuit breaker is already tripped
+    if discovery_breaker.is_degraded:
+        logger.warning(
+            "Discovery system is degraded (consecutive failures: %d). "
+            "Proceeding with fresh discovery but monitoring closely.",
+            discovery_breaker.consecutive_failures,
+        )
 
     meta = {
         "niche": payload.niche,
@@ -166,8 +199,52 @@ async def _discover_in_background(
         await enrichment_jobs.fail_job(search_id, str(exc)[:200])
         return
 
+    # SAFETY LAYER: Evaluate discovery quality via circuit breaker
+    is_good, quality_reason = discovery_breaker.evaluate_search(
+        requested_limit=fetch_limit,
+        actual_results=len(results),
+        source_counts=counts,
+    )
+
+    if not is_good:
+        logger.warning(
+            "Discovery quality below threshold for search %s: %s "
+            "(results=%d, limit=%d, sources=%s)",
+            search_id, quality_reason, len(results), fetch_limit, counts,
+        )
+
+        # SAFETY LAYER: Check if auto-recovery should be triggered
+        if discovery_breaker.consecutive_failures >= discovery_breaker.failure_threshold:
+            if await recovery_trigger.should_trigger(discovery_breaker.consecutive_failures):
+                logger.error(
+                    "Triggering auto-recovery for search %s: %s",
+                    search_id, quality_reason,
+                )
+                try:
+                    report = await recovery_trigger.trigger_recovery(
+                        reason=quality_reason,
+                        session_factory=session_factory,
+                    )
+                    logger.info("Auto-recovery report: %s", report)
+                except Exception as recovery_exc:
+                    logger.error("Auto-recovery failed: %s", recovery_exc)
+
+    # SAFETY LAYER: Enforce minimum results threshold
+    results = enforce_minimum_results(results, MINIMUM_ACCEPTABLE_RESULTS)
+
+    # SAFETY LAYER: Filter incomplete leads before caching/display
+    results = filter_incomplete_leads(results)
+
     results.sort(key=lambda r: sum(bool(r.get(f)) for f in ("phone", "email", "website")), reverse=True)
     results = results[:limit]
+
+    # Update circuit breaker with final result count
+    final_is_good, _ = discovery_breaker.evaluate_search(limit, len(results), counts)
+    if final_is_good:
+        logger.info(
+            "Discovery quality validated for search %s: %d/%d results, %d sources active",
+            search_id, len(results), limit, sum(1 for v in counts.values() if v > 0),
+        )
 
     job = await enrichment_jobs.get_enrichment_job(search_id) or {"search_id": search_id}
     job["items"] = results

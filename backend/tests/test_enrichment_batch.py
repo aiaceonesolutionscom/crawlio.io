@@ -177,7 +177,9 @@ async def test_batch_skips_maps_lookup_when_lead_has_phone(monkeypatch):
         use_browser=False, use_google_maps=True,
     )
 
-    assert calls == ["Needs Lookup Co"]
+    # Both leads now get a Maps lookup because neither has phone+website+email
+    # (the new per-field gap-fill: maps runs when ANY contact field is missing).
+    assert calls == ["Has Phone Co", "Needs Lookup Co"]
 
 
 async def test_batch_maps_lookup_off_by_default(monkeypatch):

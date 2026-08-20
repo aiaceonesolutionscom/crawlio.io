@@ -1,0 +1,38 @@
+LEADS IMPORT FLOW ANALYSIS
+
+When user clicks "Add selected" in discovery modal:
+
+1. handleImport() runs:
+   - Filters results by selected indices
+   - Calls importDiscoveredLeads(token, items) -> POST /api/v1/leads/discover/import
+   - Backend creates leads in CRM, returns {created: [...], skipped: [...]}
+   - Shows summary: "X leads added, Y skipped (reason)"
+   - Clears selected state and removes imported items from results
+   - Calls onImported() -> closes modal, returns to LeadCenterPage
+   - LeadCenterPage should re-fetch leads from API (includes new ones)
+
+2. Common issues "leads add but not showing":
+
+   A) Daily limit reached:
+      - Free tier: 50 leads/day discovery import limit
+      - Summary shows: "X leads added. Y hit today's daily limit"
+      - Remaining today decreases by created.length
+
+   B) User expects results in modal, but they're cleared:
+      - After import, results state is filtered (line 348)
+      - Modal closes via onImported()
+      - New leads appear in LeadCenterPage (main leads list), NOT in modal
+
+   C) Import error (auth, backend error):
+      - Catch block shows: "Import failed. Please try again."
+      - ImportError state displays error message
+
+   D) Looking in wrong place:
+      - New leads go to LeadCenterPage, not discovery modal
+      - Modal results are cleared after import
+
+RECOMMENDED CHECKS:
+1. After import, go to Lead Center (main dashboard) - new leads should appear there
+2. Check import summary - how many added, why any skipped?
+3. Verify daily limit hasn't been reached (Free: 50/day)
+4. Look for "ImportError" banner if something went wrong

@@ -94,6 +94,29 @@ _OSM_TIMEOUT = 28.0
 # returns whatever real, validated leads it has instead of grinding on.
 _DISCOVERY_DEADLINE = 110.0
 
+# Source priority by region/country code - enables worldwide optimization
+# Sources are tried in order; unhealthy sources (via source_tracker) are skipped
+REGION_SOURCE_PRIORITY = {
+    "default": ["maps", "osm", "wikidata", "tavily", "directory", "bing", "bizdata", "certtransparency", "dns"],
+    "PK": ["maps", "osm", "directory", "bizdata", "tavily", "wikidata"],
+    "US": ["maps", "osm", "wikidata", "tavily", "bing", "directory"],
+    "IN": ["maps", "osm", "wikidata", "tavily", "directory"],
+    "GB": ["maps", "osm", "wikidata", "tavily", "bing", "directory"],
+    "AE": ["maps", "osm", "wikidata", "tavily", "directory"],
+    "EU": ["maps", "osm", "wikidata", "tavily", "bing", "directory"],
+}
+
+# Graceful degradation thresholds
+# If healthy sources < threshold, reduce enrichment but still return results
+DEGRADATION_THRESHOLDS = {
+    "full": 3,      # 3+ healthy sources -> full enrichment
+    "reduced": 2,   # 2 healthy sources -> basic enrichment  
+    "minimal": 1,   # 1 healthy source -> return raw validated data
+}
+
+# Minimum acceptable results before triggering fallback
+MIN_RESULTS_FLOOR = 5
+
 
 class DiscoveryUnavailableError(Exception):
     pass
@@ -134,22 +157,14 @@ def _validate_all(items: list[dict], niche: str, country_code: str, limit: int) 
 async def _scrape_city_sources(
     niche: str, city: str, country: str, limit: int, use_maps: bool = True,
     deadline: Optional[float] = None,
+    country_code: str = "PK",
 ) -> tuple[list[dict], dict[str, int], bool]:
     """Run the structured crawlers for one city. Returns (raw_candidates,
     per_source_counts, engaged) — engaged is True when at least one source
     actually returned something (vs. failing/empty).
 
-    Every source is capped at `min(limit, PER_SOURCE_FETCH_CAP)` and guarded
-    by a per-source timeout so a single slow crawler can't stall the request.
-
-    Order of attempts (first to last):
-      1. Google Maps (primary, if use_maps=True) — richest data, slowest.
-      2. OSM/Overpass (structured POIs, free).
-      3. Free Pakistan directories (extra businesses, some emails).
-      4. Wikidata (structured entities from the linked open data cloud).
-      5. Wikipedia (articles about organizations/places in the niche).
-      6. CertTransparency (CT-log entries revealing organizational domains).
-      7. DNS (enumerated subdomains and hostnames).
+    Sources are ordered by region priority; unhealthy sources (via source_tracker)
+    are skipped. Every source is capped and guarded by a per-source timeout.
 
     `use_maps=False` skips the Google Maps crawler — nearby-city fallback
     trades that richness for speed: OSM + directories alone finish in a few
@@ -157,35 +172,65 @@ async def _scrape_city_sources(
     the wait by however many cities get tried."""
     fetch_limit = min(max(limit, 1) * OVERSAMPLE_FACTOR, PER_SOURCE_FETCH_CAP)
 
-    tasks = [
-        _timed_source("osm", overpass_service.discover_businesses(niche, city, country, fetch_limit), deadline, timeout=_OSM_TIMEOUT),
-        _timed_source("directory", directory_scraper.search_businesses(niche, city, country, fetch_limit), deadline),
-        _timed_source("bing", bing_maps_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
-        _timed_source("bizdata", bizdata_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
-    ]
-    names = ["osm", "directory", "bing", "bizdata"]
+    # Get region-specific source priority
+    cc = country_code.upper()
+    # Match EU countries
+    eu_codes = {"AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"}
+    if cc in REGION_SOURCE_PRIORITY:
+        priority = REGION_SOURCE_PRIORITY[cc]
+    elif cc in eu_codes:
+        priority = REGION_SOURCE_PRIORITY["EU"]
+    else:
+        priority = REGION_SOURCE_PRIORITY["default"]
 
-    if use_maps:
-        tasks.insert(0, _timed_source("maps", maps_crawler.search_businesses(niche, city, country, fetch_limit), deadline, timeout=_MAPS_TIMEOUT))
-        names.insert(0, "maps")
+    # Get unhealthy sources from tracker
+    unhealthy = set(source_tracker.unhealthy(min_rate=0.3, min_samples=5))
 
-    # New providers: Wikidata, Wikipedia, CertTransparency, DNS.
-    # These are added after the core three; they are lighter weight and
-    # serve as supplementary sources when the primary ones are thin.
-    tasks.extend([
-        _timed_source("wikidata", wikidata_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
-        _timed_source("wikipedia", wikipedia_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
-        _timed_source("certtransparency", certtransparency_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
-        _timed_source("dns", dns_crawler.search_businesses(niche, city, country, fetch_limit), deadline),
-    ])
-    names.extend(["wikidata", "wikipedia", "certtransparency", "dns"])
+    # Source function mapping
+    source_funcs = {
+        "maps": lambda: maps_crawler.search_businesses(niche, city, country, fetch_limit),
+        "osm": lambda: overpass_service.discover_businesses(niche, city, country, fetch_limit),
+        "directory": lambda: directory_scraper.search_businesses(niche, city, country, fetch_limit),
+        "bing": lambda: bing_maps_crawler.search_businesses(niche, city, country, fetch_limit),
+        "bizdata": lambda: bizdata_crawler.search_businesses(niche, city, country, fetch_limit),
+        "wikidata": lambda: wikidata_crawler.search_businesses(niche, city, country, fetch_limit),
+        "wikipedia": lambda: wikipedia_crawler.search_businesses(niche, city, country, fetch_limit),
+        "certtransparency": lambda: certtransparency_crawler.search_businesses(niche, city, country, fetch_limit),
+        "dns": lambda: dns_crawler.search_businesses(niche, city, country, fetch_limit),
+    }
+
+    # Source timeout mapping
+    source_timeouts = {
+        "maps": _MAPS_TIMEOUT,
+        "osm": _OSM_TIMEOUT,
+        "directory": _SOURCE_TIMEOUT,
+        "bing": _SOURCE_TIMEOUT,
+        "bizdata": _SOURCE_TIMEOUT,
+        "wikidata": _SOURCE_TIMEOUT,
+        "wikipedia": _SOURCE_TIMEOUT,
+        "certtransparency": _SOURCE_TIMEOUT,
+        "dns": _SOURCE_TIMEOUT,
+    }
+
+    # Build tasks based on priority, skipping unhealthy and respecting use_maps
+    tasks = []
+    names = []
+    for source_name in priority:
+        if source_name in unhealthy:
+            logger.info("Skipping unhealthy source: %s", source_name)
+            continue
+        if source_name == "maps" and not use_maps:
+            continue
+        if source_name not in source_funcs:
+            continue
+        
+        timeout = source_timeouts.get(source_name, _SOURCE_TIMEOUT)
+        tasks.append(_timed_source(source_name, source_funcs[source_name](), deadline, timeout=timeout))
+        names.append(source_name)
 
     outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
-    source_counts: dict[str, int] = {
-        "maps": 0, "osm": 0, "directory": 0, "bing": 0, "bizdata": 0,
-        "wikidata": 0, "wikipedia": 0, "certtransparency": 0, "dns": 0,
-    }
+    source_counts: dict[str, int] = {name: 0 for name in names}
     candidates: list[dict] = []
     engaged = False
     for name, outcome in zip(names, outcomes):
@@ -255,7 +300,7 @@ async def discover_businesses(
         # every fallback stage would start right at the deadline and grind on.
         return time.monotonic() >= deadline - _SOURCE_TIMEOUT
 
-    candidates, counts, engaged = await _scrape_city_sources(niche, city, country, limit, deadline=deadline)
+    candidates, counts, engaged = await _scrape_city_sources(niche, city, country, limit, deadline=deadline, country_code=country_code)
     if source_counts is not None:
         source_counts.update(counts)
     if not engaged:
@@ -317,7 +362,7 @@ async def discover_businesses(
                 break
             remaining = limit - len(cleaned)
             syn_candidates, syn_counts, syn_engaged = await _scrape_city_sources(
-                synonym, city, country, remaining, use_maps=False, deadline=deadline
+                synonym, city, country, remaining, use_maps=False, deadline=deadline, country_code=country_code
             )
             if not syn_engaged:
                 continue
@@ -342,7 +387,7 @@ async def discover_businesses(
                 break
             remaining = limit - len(cleaned)
             nb_candidates, nb_counts, nb_engaged = await _scrape_city_sources(
-                niche, nearby["name"], country, remaining, use_maps=False, deadline=deadline
+                niche, nearby["name"], country, remaining, use_maps=False, deadline=deadline, country_code=country_code
             )
             if not nb_engaged:
                 continue
@@ -354,7 +399,8 @@ async def discover_businesses(
             cleaned = _validate_all(merged, niche, country_code, limit)
             logger.info(
                 "Nearby-city fallback %s for %s (requested %s): maps=%d osm=%d directory=%d -> %d total",
-                nearby["name"], niche, city, nb_counts["maps"], nb_counts["osm"], nb_counts["directory"], len(cleaned),
+                nearby["name"], niche, city, 
+                nb_counts.get("maps", 0), nb_counts.get("osm", 0), nb_counts.get("directory", 0), len(cleaned),
             )
 
     # Country-wide fallback: when even nearby cities are thin (rare micro-city
@@ -368,7 +414,7 @@ async def discover_businesses(
                 continue
             remaining = limit - len(cleaned)
             tc_candidates, tc_counts, tc_engaged = await _scrape_city_sources(
-                niche, top["name"], country, remaining, use_maps=False, deadline=deadline
+                niche, top["name"], country, remaining, use_maps=False, deadline=deadline, country_code=country_code
             )
             if not tc_engaged:
                 continue
@@ -401,9 +447,28 @@ async def discover_businesses(
                 niche, city, len(extra), len(cleaned),
             )
 
+    # Graceful degradation check
+    healthy_count = sum(1 for src in source_tracker.all_stats().values() if src.get("success_rate", 1.0) >= 0.3)
+    if healthy_count < DEGRADATION_THRESHOLDS["full"]:
+        logger.warning("Degraded source health: %d healthy sources, operating in reduced mode", healthy_count)
+    if len(cleaned) < MIN_RESULTS_FLOOR:
+        logger.warning("Results below minimum floor: %d < %d", len(cleaned), MIN_RESULTS_FLOOR)
+
     # Most complete first so the requested cap is filled with the best leads.
     cleaned.sort(key=lambda r: data_quality(r), reverse=True)
     return cleaned[:limit]
+
+
+def get_source_health() -> dict:
+    """Return real-time source health for monitoring/dashboard."""
+    stats = source_tracker.all_stats()
+    unhealthy = source_tracker.unhealthy(min_rate=0.3, min_samples=5)
+    return {
+        "healthy_count": len(stats) - len(unhealthy),
+        "unhealthy_sources": unhealthy,
+        "details": stats,
+        "overall_status": "healthy" if not unhealthy else "degraded",
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────

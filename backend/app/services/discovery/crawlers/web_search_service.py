@@ -20,7 +20,14 @@ listings.
 Never raises — any failure (missing/bad key, rate limit, timeout, no
 results) returns [] so a search never breaks because this optional source is
 unavailable.
+
+MULTI-QUERY STRATEGY: Runs multiple targeted queries to maximize coverage:
+1. Official website query
+2. Google Maps place query (finds GBP links)
+3. Contact info query (phone/email)
+4. Review/best-of query
 """
+import asyncio
 import logging
 
 import httpx
@@ -33,54 +40,85 @@ logger = logging.getLogger(__name__)
 TAVILY_URL = "https://api.tavily.com/search"
 TIMEOUT = 12.0
 
+# Multi-query templates for maximum coverage
+TAVILY_QUERIES = [
+    "{niche} {city} {country} official website",
+    "{niche} {city} {country} google maps place",
+    "{niche} {city} {country} phone email contact",
+    "best {niche} {city} {country} reviews",
+    "{niche} {city} {country} linkedin company",
+]
+
+
+async def _tavily_search(client: httpx.AsyncClient, query: str, max_results: int) -> list[dict]:
+    """Execute a single Tavily search query."""
+    try:
+        resp = await client.post(
+            TAVILY_URL,
+            json={
+                "api_key": settings.tavily_api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": max_results,
+            },
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Tavily query failed: %s", exc)
+        return []
+
 
 async def find_extra_businesses(niche: str, city: str, country: str, limit: int) -> list[dict]:
     """Return up to `limit` extra {name, website, source, industry} candidates
-    from a general web search. Never sets email/phone/address."""
+    from multiple targeted web searches. Never sets email/phone/address."""
     if not settings.tavily_enabled or not settings.tavily_api_key or limit < 1:
         return []
 
-    max_results = max(1, min(limit, settings.tavily_max_results))
-    query = f"{niche} in {city}, {country}"
+    max_results_per_query = max(1, min(limit, settings.tavily_max_results))
+    all_records: list[dict] = []
+    seen_urls: set[str] = set()
 
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.post(
-                TAVILY_URL,
-                json={
-                    "api_key": settings.tavily_api_key,
-                    "query": query,
-                    "search_depth": "basic",
-                    "max_results": max_results,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Tavily search failed for %s in %s: %s", niche, city, exc)
-        return []
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        # Run all queries concurrently for speed
+        query_tasks = [
+            _tavily_search(client, q.format(niche=niche, city=city, country=country), max_results_per_query)
+            for q in TAVILY_QUERIES
+        ]
+        all_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
-    records: list[dict] = []
-    for result in data.get("results", []):
-        url = (result.get("url") or "").strip()
-        title = (result.get("title") or "").strip()
-        if not url or not title:
-            continue
-        if not is_own_website(url):
-            # Directory/portal/marketplace domain — never surface it as if it
-            # were a business's own site.
-            continue
-        name = clean_business_name(title)
-        if not name:
-            continue
-        records.append({
-            "name": name,
-            "website": url,
-            "source": "web_search",
-            "industry": niche.strip().title(),
-            "social_links": {},
-        })
-        if len(records) >= limit:
-            break
+        for results in all_results:
+            if isinstance(results, Exception):
+                logger.warning("Tavily query error: %s", results)
+                continue
+            
+            for result in results:
+                url = (result.get("url") or "").strip()
+                title = (result.get("title") or "").strip()
+                if not url or not title:
+                    continue
+                if url in seen_urls:
+                    continue
+                if not is_own_website(url):
+                    # Directory/portal/marketplace domain — never surface it as if it
+                    # were a business's own site.
+                    continue
+                name = clean_business_name(title)
+                if not name:
+                    continue
+                seen_urls.add(url)
+                all_records.append({
+                    "name": name,
+                    "website": url,
+                    "source": "web_search",
+                    "industry": niche.strip().title(),
+                    "social_links": {},
+                })
+                if len(all_records) >= limit:
+                    break
+            
+            if len(all_records) >= limit:
+                break
 
-    return records
+    return all_records[:limit]

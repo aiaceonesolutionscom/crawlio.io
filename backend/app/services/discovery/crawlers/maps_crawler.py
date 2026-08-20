@@ -114,7 +114,7 @@ def _query_url(niche: str, city: str, country: str) -> str:
     return f"https://www.google.com/maps/search/{query}?hl=en"
 
 
-async def _human_pause(low: float = 0.4, high: float = 1.4) -> None:
+async def _human_pause(low: float = 3.0, high: float = 5.0) -> None:
     await asyncio.sleep(random.uniform(low, high))
 
 
@@ -135,6 +135,13 @@ def _coords_from_url(url: str) -> tuple[Optional[float], Optional[float]]:
         return float(match.group(1)), float(match.group(2))
     except ValueError:
         return None, None
+
+
+def _random_viewport() -> dict:
+    """Return a random realistic desktop viewport to avoid fingerprinting."""
+    widths = [1280, 1366, 1440, 1536, 1600, 1920]
+    heights = [720, 768, 800, 864, 900, 1080]
+    return {"width": random.choice(widths), "height": random.choice(heights)}
 
 
 async def _card_text(el) -> str:
@@ -477,7 +484,7 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                 context = await browser.new_context(
                     user_agent=user_agent,
                     locale=locale,
-                    viewport={"width": 1280, "height": 900},
+                    viewport=_random_viewport(),
                     timezone_id=_pick_timezone(locale),
                 )
                 # Bandwidth optimization: block images/fonts/media/styles so the
@@ -542,10 +549,37 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                     # Panel details per place, bounded by the requested limit.
                     panel_limit = max(1, min(len(feed), settings.google_maps_search_limit, limit))
                     semaphore = asyncio.Semaphore(_PLACE_CONCURRENCY)
+                    scrape_count = 0
 
                     async def _scrape_one(card: dict) -> Optional[dict]:
+                        nonlocal scrape_count, context
                         async with semaphore:
-                            await _human_pause(0.6, 1.8)
+                            await _human_pause()
+                            # Rotate browser context every 5 scrapes to avoid fingerprint buildup
+                            if scrape_count > 0 and scrape_count % 5 == 0:
+                                try:
+                                    await context.close()
+                                except Exception:
+                                    pass
+                                context = await browser.new_context(
+                                    user_agent=_pick_user_agent(),
+                                    locale=_pick_locale(),
+                                    viewport=_random_viewport(),
+                                    timezone_id=_pick_timezone(_pick_locale()),
+                                )
+                                # Re-apply resource blocking
+                                try:
+                                    await context.route(
+                                        "**/*",
+                                        lambda route: (
+                                            route.abort()
+                                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
+                                            else route.continue_()
+                                        ),
+                                    )
+                                except (PlaywrightError, AttributeError):
+                                    pass
+                            scrape_count += 1
                             record = await _scrape_place(context, card)
                             if record.get("name"):
                                 record.setdefault("source", "google_maps")
@@ -629,7 +663,7 @@ async def lookup_business_by_name(name: str, city: str, country: str) -> Optiona
                 context = await browser.new_context(
                     user_agent=user_agent,
                     locale=locale,
-                    viewport={"width": 1280, "height": 900},
+                    viewport=_random_viewport(),
                     timezone_id=_pick_timezone(locale),
                 )
                 try:

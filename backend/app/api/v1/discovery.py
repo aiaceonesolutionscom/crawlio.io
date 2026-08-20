@@ -215,7 +215,7 @@ async def _discover_in_background(
 
         # SAFETY LAYER: Check if auto-recovery should be triggered
         if discovery_breaker.consecutive_failures >= discovery_breaker.failure_threshold:
-            if await recovery_trigger.should_trigger(discovery_breaker.consecutive_failures):
+            if recovery_trigger.should_trigger(discovery_breaker.consecutive_failures):
                 logger.error(
                     "Triggering auto-recovery for search %s: %s",
                     search_id, quality_reason,

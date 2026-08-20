@@ -47,6 +47,47 @@ OVERPASS_HTTP_TIMEOUT = 15.0
 # allowlists.
 OVERPASS_HEADERS = {"User-Agent": "curl/8.4.0"}
 
+# Mirror health tracking - tracks success/failure rates per mirror
+# Prefers top 3 healthy mirrors, caches for 1 hour
+_mirror_health: dict[str, dict] = {}
+_MIRROR_HEALTH_TTL = 3600  # 1 hour
+
+def _update_mirror_health(mirror: str, success: bool) -> None:
+    """Update health stats for a mirror."""
+    import time
+    now = time.time()
+    if mirror not in _mirror_health:
+        _mirror_health[mirror] = {"success": 0, "failure": 0, "last_update": now}
+    h = _mirror_health[mirror]
+    if success:
+        h["success"] += 1
+    else:
+        h["failure"] += 1
+    h["last_update"] = now
+
+def _get_healthy_mirrors(limit: int = 3) -> list[str]:
+    """Return top N healthiest mirrors, fallback to all if insufficient data."""
+    import time
+    now = time.time()
+    # Clean expired entries
+    for m in list(_mirror_health.keys()):
+        if now - _mirror_health[m]["last_update"] > _MIRROR_HEALTH_TTL:
+            del _mirror_health[m]
+    
+    if not _mirror_health:
+        return OVERPASS_MIRRORS[:limit]
+    
+    # Sort by success rate (success / total)
+    scored = []
+    for mirror in OVERPASS_MIRRORS:
+        h = _mirror_health.get(mirror, {"success": 1, "failure": 0})
+        total = h["success"] + h["failure"]
+        rate = h["success"] / total if total > 0 else 1.0
+        scored.append((mirror, rate))
+    
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [m for m, _ in scored[:limit]]
+
 
 def _build_query(tags: list[dict[str, str]], lat: float, lon: float, radius_m: int, limit: int) -> str:
     around = f"around:{radius_m},{lat},{lon}"
@@ -166,31 +207,35 @@ async def _query_one_mirror(client: httpx.AsyncClient, mirror: str, query: str) 
 
 
 async def _run_overpass_query(query: str) -> list[dict]:
-    """Fires all mirrors at once and returns as soon as one comes back with
-    actual results, instead of trying them one at a time — a sequential
-    fallback across 5 mirrors could take 5x the per-mirror timeout before
-    giving up, far too slow for an interactive search. Retried once after a
-    short pause when every mirror fails or returns nothing, because the public
-    mirrors are flaky under load (504/429) and a single instant can collapse
-    an entire search to directory-only results. Never raises: on total mirror
-    failure, logs and returns an empty list so this source can never block or
-    fail the overall discovery search."""
+    """Fires healthy mirrors at once and returns as soon as one comes back with
+    actual results. Uses mirror health tracking to prefer reliable mirrors.
+    Progressive timeout: 10s -> 20s -> 30s per attempt. Never raises: on total
+    mirror failure, logs and returns an empty list so this source can never
+    block or fail the overall discovery search."""
     empty_result: Optional[list[dict]] = None
-    async with httpx.AsyncClient(timeout=OVERPASS_HTTP_TIMEOUT, headers=OVERPASS_HEADERS) as client:
-        for attempt in range(2):
+    
+    # Use healthy mirrors with progressive timeout
+    timeouts = [10.0, 20.0, 30.0]
+    
+    for timeout in timeouts:
+        mirrors = _get_healthy_mirrors(limit=3)
+        async with httpx.AsyncClient(timeout=timeout, headers=OVERPASS_HEADERS) as client:
             tasks = {
                 asyncio.create_task(_query_one_mirror(client, mirror, query)): mirror
-                for mirror in OVERPASS_MIRRORS
+                for mirror in mirrors
             }
             pending = set(tasks)
             try:
                 while pending:
                     done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
+                        mirror = tasks[task]
                         try:
                             result = task.result()
+                            _update_mirror_health(mirror, True)
                         except (httpx.HTTPError, ValueError) as exc:
-                            logger.warning("Overpass mirror %s failed: %s", tasks[task], exc)
+                            logger.warning("Overpass mirror %s failed: %s", mirror, exc)
+                            _update_mirror_health(mirror, False)
                             continue
                         if result:
                             return result
@@ -198,8 +243,12 @@ async def _run_overpass_query(query: str) -> list[dict]:
             finally:
                 for task in pending:
                     task.cancel()
-            if attempt == 0:
-                await asyncio.sleep(1.0)
+        
+        # If we got here, all mirrors failed at this timeout level
+        # Try next timeout level with all mirrors
+        if timeout < timeouts[-1]:
+            await asyncio.sleep(1.0)
+            continue
 
     return empty_result if empty_result is not None else []
 

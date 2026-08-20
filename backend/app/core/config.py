@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     google_maps_max_results: int = 50
     google_maps_headless: bool = True
-    google_maps_delay_seconds: float = 1.5
+    google_maps_delay_seconds: float = 3.0
     google_maps_search_limit: int = 50
     proxy_url: str = ""
     # Rotating residential proxy pool (anti-bot for Google Maps). Comma-separated
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # tried again.
     proxy_cooldown_seconds: int = 300
     directory_enabled: bool = True
-    bing_maps_enabled: bool = False
+    bing_maps_enabled: bool = True
     bizdata_enabled: bool = True
     geoapify_api_key: str = ""
     geoapify_enabled: bool = True
@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     discovery_prewarm_enabled: bool = False
     discovery_prewarm_interval_minutes: int = 10
     discovery_prewarm_batch_size: int = 2
+    # Discovery safety thresholds (set to 0 to disable in tests)
+    discovery_quality_floor: float = 0.15
+    discovery_min_results: int = 1
 
     google_client_id: str = ""
     google_client_secret: str = ""

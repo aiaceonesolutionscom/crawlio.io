@@ -250,7 +250,7 @@ class CacheQualityValidator:
     score are returned from cache; everything else triggers fresh discovery.
     """
 
-    MIN_CACHED_RESULTS = 5
+    MIN_CACHED_RESULTS = 1
     MAX_CACHE_AGE_HOURS = 12
 
     def __init__(self):

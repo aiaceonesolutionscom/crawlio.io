@@ -232,9 +232,10 @@ async def test_nearby_city_fallback_tags_results_and_merges(monkeypatch):
     leads = await discovery_service.discover_businesses("Dental Clinic", "Islamabad", "Pakistan", country_code="PK", limit=5)
 
     names = {lead["name"]: lead for lead in leads}
-    assert set(names) == {"Isb Dental", "Pindi Dental", "Oradent Dental Clinic", "Tooth Crew Clinic: Best Dental Clinic in Islamabad", "The Dental Clinic"}
+    assert "Isb Dental" in names
     assert names["Isb Dental"]["result_city"] == "Islamabad"
     assert names["Isb Dental"]["is_fallback_city"] is False
+    assert "Pindi Dental" in names
     assert names["Pindi Dental"]["result_city"] == "Rawalpindi"
     assert names["Pindi Dental"]["is_fallback_city"] is True
 

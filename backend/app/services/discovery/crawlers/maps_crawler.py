@@ -33,9 +33,9 @@ from app.services.discovery.crawlers.base import CircuitBreaker, ProxyRotator, s
 
 logger = logging.getLogger(__name__)
 
-NAV_TIMEOUT_MS = 10_000
-FEED_WAIT_MS = 6_000
-SETTLE_MS = 700
+NAV_TIMEOUT_MS = 15_000
+FEED_WAIT_MS = 15_000
+SETTLE_MS = 1000
 # How many times we scroll the result feed before giving up on loading more.
 MAX_SCROLLS = 24
 # Concurrent place-page visits — bounded so a large request (e.g. 50 leads)
@@ -144,6 +144,29 @@ def _random_viewport() -> dict:
     return {"width": random.choice(widths), "height": random.choice(heights)}
 
 
+async def _handle_consent_dialog(page) -> None:
+    """Handle Google Maps consent dialog if present."""
+    # Common consent button selectors for Google Maps
+    consent_selectors = [
+        'button:has-text("Accept all")',
+        'button:has-text("I agree")',
+        'button:has-text("Accept")',
+        'button[jsaction*="consent"]',
+        'form[action*="consent"] button',
+        '[aria-label*="consent"] button',
+        'button[aria-label*="Accept"]',
+    ]
+    for sel in consent_selectors:
+        try:
+            btn = await page.query_selector(sel)
+            if btn:
+                await btn.click()
+                await page.wait_for_timeout(1000)
+                break
+        except PlaywrightError:
+            continue
+
+
 async def _card_text(el) -> str:
     try:
         return (await el.inner_text()).strip()
@@ -188,7 +211,8 @@ async def _collect_feed_links(page, limit: int) -> list[dict]:
     seen_urls: set[str] = set()
 
     async def _scan() -> None:
-        anchors = await page.query_selector_all('div[role="feed"] a[href*="/maps/place/"]')
+        # Try multiple selectors for the new Google Maps feed structure
+        anchors = await page.query_selector_all('a[href*="/maps/place/"]')
         for a in anchors:
             try:
                 href = await a.get_attribute("href")
@@ -214,7 +238,20 @@ async def _collect_feed_links(page, limit: int) -> list[dict]:
             if len(links) >= limit:
                 return
 
-    feed = await page.query_selector('div[role="feed"]')
+    # Try multiple feed container selectors for new Google Maps structure
+    feed_selectors = [
+        'div[role="feed"]',
+        'div.m6QErb',
+        'div[jsaction*="pane"]',
+        'div[role="main"]',
+    ]
+    
+    feed = None
+    for sel in feed_selectors:
+        feed = await page.query_selector(sel)
+        if feed:
+            break
+    
     if feed is None:
         return []
 
@@ -227,7 +264,7 @@ async def _collect_feed_links(page, limit: int) -> list[dict]:
             await feed.evaluate("(el) => el.scrollBy(0, el.scrollHeight)")
         except PlaywrightError:
             break
-        await page.wait_for_timeout(random.randint(700, 1400))
+        await page.wait_for_timeout(random.randint(1000, 2000))
         await _scan()
         # Nothing new loaded — the feed is exhausted.
         if len(links) == before:
@@ -505,6 +542,8 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                     page = await context.new_page()
                     try:
                         await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+                        # Handle Google consent dialog if present
+                        await _handle_consent_dialog(page)
                         # Google may show a consent/captcha wall — wait for the
                         # result feed to actually render before deciding.
                         await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
@@ -549,37 +588,10 @@ async def search_businesses(niche: str, city: str, country: str, limit: int = 50
                     # Panel details per place, bounded by the requested limit.
                     panel_limit = max(1, min(len(feed), settings.google_maps_search_limit, limit))
                     semaphore = asyncio.Semaphore(_PLACE_CONCURRENCY)
-                    scrape_count = 0
 
                     async def _scrape_one(card: dict) -> Optional[dict]:
-                        nonlocal scrape_count, context
                         async with semaphore:
                             await _human_pause()
-                            # Rotate browser context every 5 scrapes to avoid fingerprint buildup
-                            if scrape_count > 0 and scrape_count % 5 == 0:
-                                try:
-                                    await context.close()
-                                except Exception:
-                                    pass
-                                context = await browser.new_context(
-                                    user_agent=_pick_user_agent(),
-                                    locale=_pick_locale(),
-                                    viewport=_random_viewport(),
-                                    timezone_id=_pick_timezone(_pick_locale()),
-                                )
-                                # Re-apply resource blocking
-                                try:
-                                    await context.route(
-                                        "**/*",
-                                        lambda route: (
-                                            route.abort()
-                                            if route.request.resource_type in {"image", "font", "media", "stylesheet"}
-                                            else route.continue_()
-                                        ),
-                                    )
-                                except (PlaywrightError, AttributeError):
-                                    pass
-                            scrape_count += 1
                             record = await _scrape_place(context, card)
                             if record.get("name"):
                                 record.setdefault("source", "google_maps")
@@ -681,28 +693,46 @@ async def lookup_business_by_name(name: str, city: str, country: str) -> Optiona
                     page = await context.new_page()
                     try:
                         await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-                        await page.wait_for_selector('div[role="feed"]', timeout=FEED_WAIT_MS)
+                        await _handle_consent_dialog(page)
+                        await page.wait_for_timeout(3000)
+                        place_panel = await page.query_selector('[role="main"] h1, [data-item-id="authority"], button[data-item-id^="phone:"]')
+                        if place_panel:
+                            logger.info("Google Maps lookup: page shows place panel directly for %s", name)
+                            record = await _scrape_place(context, {"url": url, "name": name})
+                            if record.get("name") and _name_similarity(name, record.get("name") or "") >= 0.4:
+                                record.setdefault("source", "google_maps")
+                                _breaker.record_success()
+                                source_tracker.record_success("google_maps")
+                                _proxy_rotator.mark_success(proxy)
+                                return record
+
+                            feed = None
+                            for sel in ('div[role="feed"]', 'div.m6QErb', 'div[jsaction*="pane"]', 'div[role="main"]'):
+                                feed = await page.query_selector(sel)
+                                if feed:
+                                    break
+                            if not feed:
+                                logger.warning("Google Maps lookup feed not found for %s", name)
+                                return None
+                            await page.wait_for_timeout(2000)
                     except PlaywrightError as exc:
-                        try:
-                            html_sample = await page.content()
-                        except PlaywrightError:
-                            html_sample = ""
-                        if _looks_blocked(page.url, html_sample):
-                            logger.warning("Google Maps lookup appears blocked for %s (proxy=%s): %s", name, proxy, exc)
-                            _breaker.record_failure()
-                            source_tracker.record_failure("google_maps")
-                            _proxy_rotator.mark_failure(proxy)
+                            try:
+                                html_sample = await page.content()
+                            except PlaywrightError:
+                                html_sample = ""
+                            if _looks_blocked(page.url, html_sample):
+                                logger.warning("Google Maps lookup appears blocked for %s (proxy=%s): %s", name, proxy, exc)
+                                _breaker.record_failure()
+                                source_tracker.record_failure("google_maps")
+                                _proxy_rotator.mark_failure(proxy)
+                                return None
+                            logger.warning("Google Maps lookup feed not found for %s: %s", name, exc)
                             return None
-                        logger.warning("Google Maps lookup feed not found for %s: %s", name, exc)
-                        return None
 
                     feed = await _collect_feed_links(page, limit=5)
                     if not feed:
                         return None
 
-                    # Pick the candidate whose name best matches the query; only
-                    # trust it when the overlap is strong enough to be the same
-                    # business rather than a look-alike listing.
                     best_card = max(feed, key=lambda c: _name_similarity(name, c.get("name") or ""))
                     if _name_similarity(name, best_card.get("name") or "") < 0.4:
                         logger.info(
@@ -734,5 +764,3 @@ async def lookup_business_by_name(name: str, city: str, country: str) -> Optiona
         _breaker.record_failure()
         source_tracker.record_failure("google_maps")
         return None
-
-    return None

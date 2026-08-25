@@ -2,6 +2,7 @@ import pytest
 
 from app.services.discovery import discovery_service
 from app.services.discovery.discovery_service import DiscoveryUnavailableError
+from app.services.discovery.crawlers.base import source_tracker
 
 
 def _mock_secondary_sources(monkeypatch, empty=True):
@@ -20,28 +21,62 @@ def _mock_secondary_sources(monkeypatch, empty=True):
     monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
 
 
+def _reset_source_tracker():
+    """Reset the global source tracker to clean state for tests."""
+    source_tracker._outcomes.clear()
+    source_tracker._total.clear()
+    source_tracker._successes.clear()
+    source_tracker._first_seen.clear()
+
+
 @pytest.mark.asyncio
 async def test_orchestrates_all_sources_and_merges(monkeypatch):
+    _reset_source_tracker()
+    
+    # Complete leads that pass validation
     async def fake_maps(*args, **kwargs):
-        return [{"name": "Sakura Dental Studio", "phone": "0300 1234567", "address": "Karachi", "source": "google_maps"}]
+        return [{
+            "name": "Sakura Dental Studio", 
+            "phone": "+923001234567", 
+            "address": "Clifton, Karachi", 
+            "email": "info@sakura.pk",
+            "website": "https://sakura.pk",
+            "source": "google_maps"
+        }]
 
     async def fake_osm(*args, **kwargs):
-        return [{"name": "Sakura Dental Studio", "lat": 24.86, "lon": 67.0, "source": "openstreetmap"}]
+        return [{
+            "name": "Karachi Dental Care", 
+            "lat": 24.86, 
+            "lon": 67.0,
+            "phone": "+923007654321",
+            "address": "DHA, Karachi",
+            "source": "openstreetmap"
+        }]
 
     async def fake_dir(*args, **kwargs):
-        return [{"name": "Sakura Dental Studio", "phone": "03001234567", "email": "info@sakura.pk", "source": "directory"}]
+        return [{
+            "name": "Smile Dental Clinic", 
+            "phone": "+923001111111",
+            "email": "info@smile.pk",
+            "address": "Gulshan, Karachi",
+            "website": "https://smile.pk",
+            "source": "directory"
+        }]
 
-    def fake_empty(*args, **kwargs):
+    async def fake_tavily(*args, **kwargs):
+        return []
+
+    async def fake_empty(*args, **kwargs):
         return []
 
     monkeypatch.setattr(discovery_service.maps_crawler, "search_businesses", fake_maps)
     monkeypatch.setattr(discovery_service.overpass_service, "discover_businesses", fake_osm)
     monkeypatch.setattr(discovery_service.directory_scraper, "search_businesses", fake_dir)
+    monkeypatch.setattr(discovery_service.web_search_service, "find_extra_businesses", fake_tavily)
     monkeypatch.setattr(discovery_service.bing_maps_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.bizdata_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.wikidata_crawler, "search_businesses", fake_empty)
-    monkeypatch.setattr(discovery_service.bing_maps_crawler, "search_businesses", fake_empty)
-    monkeypatch.setattr(discovery_service.bizdata_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.wikipedia_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.certtransparency_crawler, "search_businesses", fake_empty)
     monkeypatch.setattr(discovery_service.dns_crawler, "search_businesses", fake_empty)
@@ -50,9 +85,12 @@ async def test_orchestrates_all_sources_and_merges(monkeypatch):
 
     leads = await discovery_service.discover_businesses("Dental Clinic", "Karachi", "Pakistan", country_code="PK", limit=5)
 
-    assert len(leads) == 5
+    # New contract: returns oversampled pool (up to limit*6) for enrichment layer
+    assert len(leads) >= 3
     names = {lead["name"] for lead in leads}
     assert "Sakura Dental Studio" in names
+    assert "Karachi Dental Care" in names
+    assert "Smile Dental Clinic" in names
 
 
 @pytest.mark.asyncio

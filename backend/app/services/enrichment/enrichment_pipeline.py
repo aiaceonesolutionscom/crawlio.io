@@ -101,6 +101,26 @@ async def _finalize(result: dict, scraped: dict, sources: list[str], city: str, 
             result["lon"] = geocoded["lon"]
             sources.append("geocoding")
 
+    # Add scrape_note based on scrape outcome
+    if result.get("website"):
+        if not scraped:
+            result["scrape_note"] = "no_website_content_fetched"
+        elif not scraped.get("_scraped_ok", True):
+            # Scraper had an error (timeout, blocked, etc.)
+            err = scraped.get("_scrape_error", "unknown_error")
+            result["scrape_note"] = f"website_unreachable: {err}"
+        elif not any(scraped.get(f) for f in ("email", "phone", "address", "social_links")):
+            # Page loaded but no contact info found
+            result["scrape_note"] = "site_loaded_no_contact_published"
+        else:
+            # Successful scrape with some contact data
+            found = []
+            if scraped.get("email"): found.append("email")
+            if scraped.get("phone"): found.append("phone")
+            if scraped.get("social_links"): found.append("social")
+            if scraped.get("address"): found.append("address")
+            result["scrape_note"] = f"scraped_ok: {', '.join(found) if found else 'page_only'}"
+
     result["social_links"] = result.get("social_links") or {}
     if result.get("website"):
         result["website"] = normalize_website_url(result["website"])
@@ -119,8 +139,13 @@ async def enrich_item(
     country: str,
     country_code: Optional[str] = None,
     use_browser: bool = True,
-    use_ai: bool = True,  # kept for call-site compatibility; AI is never used now
+    use_ai: bool = True,
     use_google_maps: bool = False,
+    enable_website_scraping: bool = True,
+    enable_phone_enrichment: bool = True,
+    enable_email_enrichment: bool = True,
+    enable_address_enrichment: bool = True,
+    enable_social_media: bool = False,
 ) -> dict:
     """Enrich one lead dict in place of the old AI pipeline. Returns a new dict
     with enriched fields + quality metadata. Never raises.
@@ -144,26 +169,35 @@ async def enrich_item(
     #    ANY contact channel is missing (not just when both phone+website are
     #    absent), so a lead with a phone but no website/email still gets its
     #    GBP panel pulled.
-    if use_google_maps and not (result.get("phone") and result.get("website") and result.get("email")):
+    if use_google_maps and enable_phone_enrichment and not (result.get("phone") and result.get("website") and result.get("email")):
         maps_record = await _maps_lookup(result, city, country)
         if maps_record:
             _fill_gaps(result, maps_record)
             sources.append("google_maps")
             website = result.get("website") or website
 
-    # 2. Website scrape pass: ANY website — whether it arrived with the lead,
-    #    from the maps lookup, or from Tavily — is scraped for email/phone/
-    #    address. This fixes the order bug where a maps-added website was
-    #    never crawled for its contact data.
+    # 2. Website scrape pass: ONLY if enable_website_scraping is True
     scraped: dict = {}
-    if website:
+    if website and enable_website_scraping:
         try:
             scraped = await _scrape_website(website, use_browser, country_code)
         except Exception as exc:
             logger.warning("Enrichment website scrape failed for %s: %s", website, exc)
             scraped = {}
         if scraped:
-            _fill_gaps(result, scraped)
+            # Only fill gaps for fields that are enabled
+            if enable_email_enrichment and scraped.get("email"):
+                result["email"] = scraped["email"]
+            if enable_phone_enrichment and scraped.get("phone"):
+                result["phone"] = scraped["phone"]
+            if enable_address_enrichment and scraped.get("address"):
+                result["address"] = scraped["address"]
+            if enable_social_media and scraped.get("social_links"):
+                result["social_links"] = {**result.get("social_links", {}), **scraped["social_links"]}
+            if scraped.get("hours"):
+                result["hours"] = scraped["hours"]
+            if scraped.get("description"):
+                result["description"] = scraped["description"]
             sources.append("website")
 
     return await _finalize(result, scraped, sources, city, country)
@@ -176,8 +210,13 @@ async def enrich_items_batch(
     country: str,
     country_code: Optional[str] = None,
     use_browser: bool = True,
-    use_ai: bool = True,  # kept for call-site compatibility; AI is never used now
+    use_ai: bool = True,
     use_google_maps: bool = False,
+    enable_website_scraping: bool = True,
+    enable_phone_enrichment: bool = True,
+    enable_email_enrichment: bool = True,
+    enable_address_enrichment: bool = True,
+    enable_social_media: bool = False,
 ) -> list[dict]:
     """Batch version of enrich_item — same output shape, but every lead in
     `items` that needs a headless-browser scrape shares ONE browser instance
@@ -194,7 +233,7 @@ async def enrich_items_batch(
     #    Sequential (one Playwright lookup per lead), bounded by MAPS_LOOKUP_CAP
     #    to keep the batch's latency sane. This runs before the website pass so
     #    any website the GBP panel reveals gets scraped below.
-    if use_google_maps:
+    if use_google_maps and enable_phone_enrichment:
         looked_up = 0
         for i, result in enumerate(results):
             if looked_up >= MAPS_LOOKUP_CAP:
@@ -209,12 +248,10 @@ async def enrich_items_batch(
                 _fill_gaps(result, maps_record)
                 sources_by_index[i].append("google_maps")
 
-    # 2. Website scrape pass over EVERY website the leads now carry — whether it
-    #    arrived with the source, from the maps lookup above, or from Tavily.
-    #    This is the "website from any source gets crawled" rule.
+    # 2. Website scrape pass over EVERY website the leads now carry — ONLY if enable_website_scraping is True
     websites = [(r.get("website") or "") if r.get("name") else "" for r in results]
 
-    if use_browser:
+    if use_browser and enable_website_scraping:
         # Every website-having lead goes through one shared browser.
         urls = [w for w in websites if w]
         if urls:
@@ -274,7 +311,20 @@ async def enrich_items_batch(
             continue
         scraped = scraped_by_index.get(i, {})
         if scraped:
-            _fill_gaps(result, scraped)
+            # Only fill gaps for enabled fields
+            if enable_email_enrichment and scraped.get("email"):
+                result["email"] = scraped["email"]
+            if enable_phone_enrichment and scraped.get("phone"):
+                result["phone"] = scraped["phone"]
+            if enable_address_enrichment and scraped.get("address"):
+                result["address"] = scraped["address"]
+            if enable_social_media and scraped.get("social_links"):
+                result["social_links"] = {**result.get("social_links", {}), **scraped["social_links"]}
+            if scraped.get("hours"):
+                result["hours"] = scraped["hours"]
+            if scraped.get("description"):
+                result["description"] = scraped["description"]
+            sources_by_index[i].append("website")
         results[i] = await _finalize(result, scraped, sources_by_index[i], city, country)
 
     return results

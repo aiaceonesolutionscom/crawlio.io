@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     env: str = "development"
-    database_url: str = "postgresql+asyncpg://crawlio:crawlio@localhost:5432/crawlio"
+    database_url: str = "postgresql+asyncpg://crawlio:crawlio@127.0.0.1:5432/crawlio"
 
     cors_origins: str = ""
 

@@ -38,7 +38,7 @@ from app.services.discovery.contact_extraction import clean_business_name, is_ow
 logger = logging.getLogger(__name__)
 
 TAVILY_URL = "https://api.tavily.com/search"
-TIMEOUT = 12.0
+TIMEOUT = 30.0
 
 # Multi-query templates for maximum coverage
 TAVILY_QUERIES = [
@@ -76,7 +76,7 @@ async def find_extra_businesses(niche: str, city: str, country: str, limit: int)
     if not settings.tavily_enabled or not settings.tavily_api_key or limit < 1:
         return []
 
-    max_results_per_query = max(1, min(limit, settings.tavily_max_results))
+    max_results_per_query = max(limit, 10)
     all_records: list[dict] = []
     seen_urls: set[str] = set()
 

@@ -26,7 +26,11 @@ logger = logging.getLogger(__name__)
 # Pages that genuinely carry contact info. A homepage rarely lists an email, but
 # its links usually point at a page that does — so we first fetch the known
 # conventional paths, then crawl homepage links that look like contact/about.
-CONTACT_SUBPATHS = ["/contact", "/contact-us", "/contact.html", "/about", "/about-us"]
+CONTACT_SUBPATHS = [
+    "/contact", "/contact-us", "/contact.html", "/about", "/about-us",
+    "/hotel-details", "/reach-us", "/get-in-touch", "/say-hello",
+    "/contactus", "/getintouch", "/connect-with-us", "/sayhello"
+]
 
 # Anchor text (or href) that signals a contact-ish page. Also accepts the
 # Spanish/French/Arabic-adjacent spellings small businesses often use.

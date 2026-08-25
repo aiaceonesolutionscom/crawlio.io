@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import uuid
 from typing import Annotated, Optional
 
@@ -29,6 +30,8 @@ from app.services.discovery.discovery_safety import (
     recovery_trigger,
 )
 from app.services.enrichment import enrichment_jobs
+from app.services.enrichment.enrichment_pipeline import enrich_items_batch
+from app.services.lead.lead_quality import data_quality
 from app.services.lead.lead_service import DuplicateLeadError, create_lead, find_existing_emails_and_phones
 from app.services.workspace.quota_service import count_discovery_leads_today
 from app.workers.tasks_enrichment import _enrich_batch_async
@@ -177,18 +180,35 @@ async def _discover_in_background(
     """Run the crawl + enrichment off the request path and publish progress into
     the job store, which the polling status endpoint reads. `session_factory`
     defaults to the app-wide maker; callers pass the request engine's own maker
-    so tests (in-memory DB) and multi-engine setups stay consistent."""
+    so tests (in-memory DB) and multi-engine setups stay consistent.
+    
+    Now uses the exact-count fill loop from discovery_service to guarantee
+    exactly `limit` validated results, or exhaust all sources trying."""
     session_factory = session_factory or async_session_maker
     counts: dict[str, int] = {}
+    
     try:
-        results = await discovery_service.discover_businesses(
-            payload.niche,
-            payload.city,
-            country_name,
+        # Use the new exact-count fill loop with permission filters from payload
+        final_results = await discovery_service.discover_businesses_exact(
+            niche=payload.niche,
+            city=payload.city,
+            country=country_name,
             country_code=payload.country,
-            limit=fetch_limit,
+            limit=limit,
             enrich_candidates=enhanced,
             source_counts=counts,
+            max_rounds=5,
+            deadline_seconds=180.0,
+            # User permission filters from DiscoverRequest
+            enable_website_scraping=payload.enable_website_scraping,
+            enable_social_media=payload.enable_social_media,
+            enable_phone_enrichment=payload.enable_phone_enrichment,
+            enable_email_enrichment=payload.enable_email_enrichment,
+            enable_address_enrichment=payload.enable_address_enrichment,
+            use_google_maps=payload.use_google_maps,
+            use_osm=payload.use_osm,
+            use_directories=payload.use_directories,
+            use_tavily=payload.use_tavily,
         )
     except discovery_service.DiscoveryUnavailableError as exc:
         logger.warning("Background discovery unavailable for %s: %s", search_id, exc)
@@ -199,10 +219,16 @@ async def _discover_in_background(
         await enrichment_jobs.fail_job(search_id, str(exc)[:200])
         return
 
+    # Safety: if we still have nothing at all, fail the job
+    if not final_results:
+        logger.warning("No leads found for search %s", search_id)
+        await enrichment_jobs.fail_job(search_id, "No quality leads found")
+        return
+
     # SAFETY LAYER: Evaluate discovery quality via circuit breaker
     is_good, quality_reason = discovery_breaker.evaluate_search(
-        requested_limit=fetch_limit,
-        actual_results=len(results),
+        requested_limit=limit,
+        actual_results=len(final_results),
         source_counts=counts,
     )
 
@@ -210,7 +236,7 @@ async def _discover_in_background(
         logger.warning(
             "Discovery quality below threshold for search %s: %s "
             "(results=%d, limit=%d, sources=%s)",
-            search_id, quality_reason, len(results), fetch_limit, counts,
+            search_id, quality_reason, len(final_results), limit, counts,
         )
 
         # SAFETY LAYER: Check if auto-recovery should be triggered
@@ -230,25 +256,27 @@ async def _discover_in_background(
                     logger.error("Auto-recovery failed: %s", recovery_exc)
 
     # SAFETY LAYER: Enforce minimum results threshold
-    results = enforce_minimum_results(results, MINIMUM_ACCEPTABLE_RESULTS)
+    final_results = enforce_minimum_results(final_results, MINIMUM_ACCEPTABLE_RESULTS)
 
-    # SAFETY LAYER: Filter incomplete leads before caching/display
-    results = filter_incomplete_leads(results)
+    # SAFETY LAYER: Filter incomplete leads
+    final_results = filter_incomplete_leads(final_results)
 
-    results.sort(key=lambda r: sum(bool(r.get(f)) for f in ("phone", "email", "website")), reverse=True)
-    results = results[:limit]
+    # Sort by completeness and trim to exact limit
+    final_results.sort(key=lambda r: data_quality(r), reverse=True)
+    final_results = final_results[:limit]
 
-    # Update circuit breaker with final result count
-    final_is_good, _ = discovery_breaker.evaluate_search(limit, len(results), counts)
+    # Single circuit-breaker evaluation on final results (no double-count)
+    final_is_good, _ = discovery_breaker.evaluate_search(limit, len(final_results), counts)
     if final_is_good:
         logger.info(
             "Discovery quality validated for search %s: %d/%d results, %d sources active",
-            search_id, len(results), limit, sum(1 for v in counts.values() if v > 0),
+            search_id, len(final_results), limit,
+            sum(1 for v in counts.values() if v > 0),
         )
 
     job = await enrichment_jobs.get_enrichment_job(search_id) or {"search_id": search_id}
-    job["items"] = results
-    job["status"] = "done" if not results else "in_progress"
+    job["items"] = final_results
+    job["status"] = "done" if not final_results else "completed"
     job["source_counts"] = counts
     await enrichment_jobs.save_job(search_id, job)
 
@@ -256,17 +284,11 @@ async def _discover_in_background(
         await discovery_cache_service.upsert_cache(
             db, payload.niche, payload.city, payload.country,
             niche_display=payload.niche, city_display=payload.city, country_display=country_name,
-            items=results,
+            items=final_results,
         )
-        await _mark_already_in_workspace(db, workspace.id, results)
+        await _mark_already_in_workspace(db, workspace.id, final_results)
 
-    if results:
-        try:
-            await _enrich_batch_async(
-                search_id, payload.city, country_name, payload.country, enhanced, enhanced, True
-            )
-        except Exception:
-            logger.exception("Background enrichment failed for %s", search_id)
+    # No additional enrichment needed - already done in the loop
 
 
 @router.get("/{search_id}", response_model=DiscoveryStatusResponse)

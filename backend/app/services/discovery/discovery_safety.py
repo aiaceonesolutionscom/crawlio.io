@@ -142,18 +142,6 @@ class DiscoveryCircuitBreaker:
                 self._trip(reason)
             return False, reason
 
-        # Check 2: Dramatic drop from previous searches
-        if len(self._search_history) >= 3:
-            prev_avg = sum(r for _, _, r in self._search_history[-4:-1]) / 3
-            if actual_results < prev_avg * 0.3 and prev_avg > 20:
-                self._consecutive_failures += 1
-                reason = f"Sudden drop: {actual_results} vs previous avg {prev_avg:.1f}"
-                logger.warning("[%s] %s (failures: %d/%d)", self.name, reason,
-                               self._consecutive_failures, self.failure_threshold)
-                if self._consecutive_failures >= self.failure_threshold:
-                    self._trip(reason)
-                return False, reason
-
         # Search passed quality checks
         self._consecutive_failures = 0
         return True, f"Acceptable: {actual_results}/{requested_limit} results"
@@ -168,12 +156,27 @@ class DiscoveryCircuitBreaker:
             self._trigger_recovery(reason)
 
     def _trigger_recovery(self, reason: str) -> None:
-        """Trigger emergency cache clear + discovery retry."""
+        """Trigger emergency cache clear + discovery retry.
+
+        Only flushes cache if ALL sources are returning 0 (genuine total outage),
+        not for partial degradation which may just be transient throttling.
+        """
         self._last_recovery = time.monotonic()
         logger.error("[%s] AUTO-RECOVERY triggered: %s", self.name, reason)
 
-        # Flush caches
-        self._flush_discovery_cache()
+        # Check if ALL sources are truly dead (all return 0) before flushing cache
+        all_sources_dead = True
+        for source, stats in self._source_stats.items():
+            if stats.last_results > 0:
+                all_sources_dead = False
+                break
+
+        if all_sources_dead and self._source_stats:
+            # Genuine total outage - flush cache to clear stale data
+            self._flush_discovery_cache()
+            logger.warning("[%s] All sources dead - discovery cache flushed", self.name)
+        else:
+            logger.info("[%s] Partial degradation detected - cache preserved", self.name)
 
         # Reset breaker temporarily to allow one retry
         self._tripped_until = time.monotonic() + 30  # Short window

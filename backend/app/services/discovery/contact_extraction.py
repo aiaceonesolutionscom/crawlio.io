@@ -20,7 +20,11 @@ from urllib.parse import unquote, urlparse
 from app.data.directory_domains import DIRECTORY_DOMAINS, DIRECTORY_MARKERS
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-PHONE_RE = re.compile(r"(?:\+\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?){2,4}\d{3,4}")
+# More permissive phone regex for international formats:
+# - Optional +country or 00country prefix
+# - Flexible digit groups (1-4 digits) with optional separators
+# - Final group 3-10 digits to accommodate various national formats
+PHONE_RE = re.compile(r"(?:\+\d{1,3}[\s-]?|00\d{1,3}[\s-]?)?(?:\(?\d{1,4}\)?[\s-]?){1,5}\d{3,10}")
 MAILTO_RE = re.compile(r'mailto:([^"\'?\s]+)', re.IGNORECASE)
 TEL_RE = re.compile(r'tel:([^"\'\s]+)', re.IGNORECASE)
 CFEMAIL_RE = re.compile(r'data-cfemail="([0-9a-fA-F]+)"')
@@ -386,7 +390,15 @@ def collect_phones(text: str, max_candidates: int = 30) -> list[str]:
         # preceded by an explicit phone label ("Call: 03001234567" with no
         # space is a common compact-footer pattern), in which case the context
         # makes it trustworthy despite the missing formatting.
+        # Relax for international formats: numbers with +, 00, or spaces are
+        # likely real even without explicit "Call:" label.
         if candidate == digits:
+            window = decoded[max(0, match.start() - _PHONE_CONTEXT_WINDOW):match.start()]
+            if not _PHONE_CONTEXT_RE.search(window):
+                continue
+        # Also allow international formats without context if they have separators
+        elif not any(c in candidate for c in "+-() "):
+            # Only digits, no formatting - need context
             window = decoded[max(0, match.start() - _PHONE_CONTEXT_WINDOW):match.start()]
             if not _PHONE_CONTEXT_RE.search(window):
                 continue
@@ -533,8 +545,10 @@ def fetch_contact_emails(url: str, country_code: Optional[str] = None,
     website, address, hours, social_links, grade (A/B/C), and raw page text.
     """
     import asyncio
-    from app.services.discovery.website_scraper_service import fetch_plain, extract_contact_from_website
     from app.services.discovery.structured_extraction import extract_from_jsonld, extract_meta_description
+    
+    # Lazy imports to avoid circular dependency
+    from app.services.discovery.website_scraper_service import fetch_plain, extract_contact_from_website
     
     target = normalize_website_url(url)
     if not target:
@@ -694,7 +708,8 @@ def find_social_links(html: str) -> dict[str, str]:
 import asyncio
 from urllib.parse import urlparse, urljoin
 
-from app.services.discovery.website_scraper_service import fetch_plain, extract_contact_from_website
+# Lazy imports to avoid circular dependency
+# from app.services.discovery.website_scraper_service import fetch_plain, extract_contact_from_website
 from app.services.discovery.structured_extraction import extract_from_jsonld
 
 
@@ -978,6 +993,10 @@ def extract_tel(html: str) -> Optional[str]:
 
 def fetch_contact_emails(url: str, country_code: Optional[str] = None,
                          caller_ip: Optional[str] = None) -> dict:
+    import asyncio
+    from app.services.discovery.website_scraper_service import fetch_plain, extract_contact_from_website
+    from app.services.discovery.structured_extraction import extract_from_jsonld, extract_meta_description
+    
     target = normalize_website_url(url)
     if not target:
         return {

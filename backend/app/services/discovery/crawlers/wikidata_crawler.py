@@ -55,7 +55,8 @@ async def _fetch_wikidata(niche: str, city: str, country: str, session: aiohttp.
     headers = {"User-Agent": WIKIDATA_USER_AGENT}
     url = f"{WIKIDATA_SPARQL_ENDPOINT}?query={query}&format=json"
 
-    async with session.get(url, headers=headers) as resp:
+    timeout = aiohttp.ClientTimeout(total=30.0)
+    async with session.get(url, headers=headers, timeout=timeout) as resp:
         if resp.status != 200:
             logger.warning("Wikidata query returned %s for niche=%s city=%s country=%s", resp.status, niche, city, country)
             return None

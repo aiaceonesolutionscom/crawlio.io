@@ -298,29 +298,49 @@ class SourceTracker:
     dashboard endpoints can show which sources are healthy and which are getting
     blocked or erroring right now -- without unbounded memory growth.
 
+    Outcomes include timestamps so `unhealthy()` can apply a time-window filter.
+    Sources that were throttled auto-recover after the window expires (default 5 min).
     Thread-safety isn't needed: all crawler calls run inside one asyncio loop.
     """
 
-    def __init__(self, window_size: int = 100):
+    def __init__(self, window_size: int = 100, time_window_seconds: float = 300.0):
         self.window_size = window_size
-        self._outcomes: dict[str, list[bool]] = {}
+        self.time_window_seconds = time_window_seconds
+        self._outcomes: dict[str, list[tuple[float, bool]]] = {}
         self._total: dict[str, int] = {}
         self._successes: dict[str, int] = {}
         self._first_seen: dict[str, float] = {}
 
+    def _now(self) -> float:
+        return time.monotonic()
+
+    def _prune_window(self, source: str, now: float) -> None:
+        """Remove outcomes older than time_window_seconds."""
+        window = self._outcomes.get(source)
+        if not window:
+            return
+        cutoff = now - self.time_window_seconds
+        while window and window[0][0] < cutoff:
+            ts, ok = window.pop(0)
+            self._total[source] -= 1
+            if ok:
+                self._successes[source] -= 1
+
     def record(self, source: str, ok: bool) -> None:
         source = source or "unknown"
+        now = self._now()
         if source not in self._outcomes:
             self._outcomes[source] = []
             self._total[source] = 0
             self._successes[source] = 0
-            self._first_seen[source] = time.monotonic()
+            self._first_seen[source] = now
+        self._prune_window(source, now)
         window = self._outcomes[source]
-        window.append(ok)
+        window.append((now, ok))
         if len(window) > self.window_size:
-            removed = window.pop(0)
+            removed_ts, removed_ok = window.pop(0)
             self._total[source] -= 1
-            if removed:
+            if removed_ok:
                 self._successes[source] -= 1
         self._total[source] += 1
         if ok:
@@ -336,6 +356,8 @@ class SourceTracker:
         """Return {total, successes, failures, success_rate, last_ok} for a
         source, or a zeroed dict when the source hasn't been seen yet."""
         source = source or "unknown"
+        now = self._now()
+        self._prune_window(source, now)
         total = self._total.get(source, 0)
         successes = self._successes.get(source, 0)
         window = self._outcomes.get(source, [])
@@ -344,7 +366,7 @@ class SourceTracker:
             "successes": successes,
             "failures": total - successes,
             "success_rate": round(successes / total, 3) if total else 1.0,
-            "last_ok": bool(window and window[-1]),
+            "last_ok": bool(window and window[-1][1]),
             "window_size": len(window),
         }
 
@@ -353,12 +375,15 @@ class SourceTracker:
 
     def unhealthy(self, min_rate: float = 0.3, min_samples: int = 5) -> list[str]:
         """Sources whose recent success rate is below `min_rate` over at least
-        `min_samples` observed calls -- candidates for the degraded flag."""
+        `min_samples` observed calls **within the time window** -- candidates for
+        the degraded flag. Sources auto-recover after time_window_seconds of no failures."""
         out: list[str] = []
+        now = self._now()
         for source, window in self._outcomes.items():
+            self._prune_window(source, now)
             if len(window) < min_samples:
                 continue
-            rate = sum(window) / len(window)
+            rate = sum(1 for _, ok in window if ok) / len(window)
             if rate < min_rate:
                 out.append(source)
         return out

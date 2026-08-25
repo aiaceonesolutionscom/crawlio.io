@@ -22,6 +22,7 @@ from app.schemas.discovery import (
     DiscoveryStatusResponse,
 )
 from app.schemas.lead import LeadCreate, lead_to_read
+from app.services.admin import plan_config_service
 from app.services.discovery import discovery_cache_service, discovery_service, geo_service
 from app.services.discovery.discovery_safety import (
     discovery_breaker,
@@ -49,6 +50,25 @@ router = APIRouter(prefix="/leads/discover", tags=["lead-discovery"])
 FREE_TIER_OVERFETCH_MULTIPLIER = 1.2
 # Minimum acceptable results before we consider a search degraded
 MINIMUM_ACCEPTABLE_RESULTS = 5
+
+
+async def _plan_limits(session: AsyncSession, workspace: Workspace) -> tuple[int, int]:
+    """(result_cap_per_search, daily_import_limit) for the workspace's plan.
+
+    Admin-editable via the plan_configs table (Plans & Limits page) — edits take
+    effect immediately. Falls back to the static dicts in app/core/plans.py when
+    no row exists or a value is unset (0), so a missing seed row never zeroes
+    out discovery.
+    """
+    result_cap = DISCOVERY_LIMITS.get(workspace.plan, 50)
+    daily_limit = DAILY_DISCOVERY_IMPORT_LIMITS.get(workspace.plan, 50)
+    config = await plan_config_service.get_plan_config(session, workspace.plan)
+    if config is not None:
+        if config.discovery_result_limit > 0:
+            result_cap = config.discovery_result_limit
+        if config.daily_discovery_import_limit > 0:
+            daily_limit = config.daily_discovery_import_limit
+    return result_cap, daily_limit
 
 
 @router.get("/niches")
@@ -79,7 +99,7 @@ async def discover(
     Phase 2 (background): each lead's own website is scraped to fill remaining
     email/social gaps; the same poll endpoint reflects enrichment progress.
     """
-    plan_cap = DISCOVERY_LIMITS.get(workspace.plan, 50)
+    plan_cap, daily_limit = await _plan_limits(session, workspace)
     limit = min(payload.limit, plan_cap) if payload.limit else plan_cap
     limit = max(limit, 1)
 
@@ -88,7 +108,6 @@ async def discover(
 
     country_name = geo_service.country_name_for_code(payload.country) or payload.country
 
-    daily_limit = DAILY_DISCOVERY_IMPORT_LIMITS.get(workspace.plan, 50)
     used_today = await count_discovery_leads_today(session, workspace.id)
     remaining_today = max(daily_limit - used_today, 0)
 
@@ -340,7 +359,7 @@ async def import_discovered(
     workspace: Annotated[Workspace, Depends(require_plan("lead_discovery"))],
     session: Annotated[AsyncSession, Depends(get_session)],
 ):
-    daily_limit = DAILY_DISCOVERY_IMPORT_LIMITS.get(workspace.plan, 50)
+    _, daily_limit = await _plan_limits(session, workspace)
     used_today = await count_discovery_leads_today(session, workspace.id)
 
     created = []

@@ -20,6 +20,12 @@ const SOURCE_LABELS: Record<string, string> = {
   directory: 'Directory'
 };
 
+const SKIP_LABELS: Record<string, string> = {
+  daily_limit_reached: 'Daily limit reached',
+  duplicate: 'Duplicate',
+  quota_exceeded: 'Workspace quota full'
+};
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -73,6 +79,10 @@ export function LeadDiscoveryModal({
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
+  // result index → why the server refused to add it. Skipped leads must stay
+  // visible with this badge — wiping them made it look like leads "vanished".
+  const [skipReasons, setSkipReasons] = useState<Record<number, string>>({});
+  const [limitBanner, setLimitBanner] = useState<string | null>(null);
 
   const reset = () => {
     setNiche('');
@@ -100,6 +110,8 @@ export function LeadDiscoveryModal({
     setIsImporting(false);
     setImportError(null);
     setImportSummary(null);
+    setSkipReasons({});
+    setLimitBanner(null);
   };
 
   const handleClose = () => {
@@ -336,16 +348,46 @@ export function LeadDiscoveryModal({
     try {
       const token = await getToken();
       const res = await importDiscoveredLeads(token, items);
+      // Rebuild the list in one pass so indexes stay consistent: only leads the
+      // server actually created are removed. Skipped ones stay visible with a
+      // reason badge — silently dropping them looked like leads "vanished".
+      const skippedByName = new Map(res.skipped.map((s) => [s.name, s.reason]));
+      const nextResults: DiscoveredLeadDTO[] = [];
+      const nextSkips: Record<number, string> = {};
+      results.forEach((r, i) => {
+        if (skipReasons[i]) {
+          nextSkips[nextResults.length] = skipReasons[i];
+          nextResults.push(r);
+          return;
+        }
+        if (selected.has(i)) {
+          const reason = skippedByName.get(r.name);
+          if (reason) {
+            nextSkips[nextResults.length] = reason;
+            nextResults.push(r);
+            return;
+          }
+          return; // created — gone from discovery, now lives in the CRM
+        }
+        nextResults.push(r);
+      });
+      setResults(nextResults);
+      setSkipReasons(nextSkips);
+
       const dailyCapped = res.skipped.filter((s) => s.reason === 'daily_limit_reached').length;
       const otherSkipped = res.skipped.length - dailyCapped;
       const parts = [`${res.created.length} lead${res.created.length === 1 ? '' : 's'} added`];
       if (dailyCapped) parts.push(`${dailyCapped} hit today's daily limit`);
       if (otherSkipped) parts.push(`${otherSkipped} skipped (duplicate or quota reached)`);
       setImportSummary(parts.join(', '));
+      if (dailyCapped > 0 && dailyLimit !== null) {
+        setLimitBanner(
+          `Today's add limit (${dailyLimit}/day on your plan) is used up — ${dailyCapped} lead${dailyCapped === 1 ? '' : 's'} couldn't be added. Limits reset tomorrow; upgrade your plan for a higher daily cap.`
+        );
+      }
       if (remainingToday !== null) {
         setRemainingToday(Math.max(remainingToday - res.created.length, 0));
       }
-      setResults((prev) => prev.filter((_, i) => !selected.has(i)));
       setSelected(new Set());
       onImported();
     } catch (err) {
@@ -586,6 +628,11 @@ export function LeadDiscoveryModal({
                   {importSummary}
                 </p>
               )}
+              {limitBanner && (
+                <p role="alert" className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3.5 py-2.5 text-[13px] text-amber-300">
+                  {limitBanner}
+                </p>
+              )}
 
               {hasSearched && !isSearching && !searchError && (
                 <div className="overflow-hidden rounded-xl border border-ink-800">
@@ -672,6 +719,11 @@ export function LeadDiscoveryModal({
                                   Already in your CRM
                                 </span>
                               )}
+                              {skipReasons[i] && (
+                                <span className="shrink-0 rounded-full border border-ember/40 px-2 py-0.5 text-[10.5px] text-ember">
+                                  {SKIP_LABELS[skipReasons[i]] ?? skipReasons[i]}
+                                </span>
+                              )}
                             </div>
                             <p className="truncate text-[12px] text-chalk-faint">
                               {[r.address, r.phone, r.email].filter(Boolean).join(' · ') || 'No contact details found'}
@@ -715,10 +767,27 @@ export function LeadDiscoveryModal({
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-ink-850 px-6 py-4">
+              {remainingToday !== null && dailyLimit !== null && (
+                <span
+                  className={cn(
+                    'mr-auto text-[12px]',
+                    remainingToday === 0 ? 'text-ember' : 'text-chalk-faint'
+                  )}
+                >
+                  {remainingToday === 0
+                    ? 'Daily add limit reached — resets tomorrow'
+                    : `${remainingToday} of ${dailyLimit} adds left today`}
+                </span>
+              )}
               <Button type="button" variant="outline" onClick={handleClose}>
                 Close
               </Button>
-              <Button type="button" disabled={selected.size === 0 || isImporting} onClick={() => void handleImport()}>
+              <Button
+                type="button"
+                disabled={selected.size === 0 || isImporting || remainingToday === 0}
+                title={remainingToday === 0 ? 'Daily add limit reached — try again tomorrow' : undefined}
+                onClick={() => void handleImport()}
+              >
                 {isImporting && <Loader2Icon className="h-4 w-4 animate-spin" />}
                 {isImporting ? 'Adding…' : `Add selected (${selected.size})`}
               </Button>

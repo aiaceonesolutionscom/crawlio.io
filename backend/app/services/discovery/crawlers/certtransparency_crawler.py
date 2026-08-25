@@ -31,7 +31,8 @@ async def _fetch_certtransparency(niche: str, city: str, country: str, session: 
     url = CT_SEARCH_URL % query
 
     headers = {"User-Agent": "crawlio/0.1.0 (discovery; +https://crawlio.io)"}
-    async with session.get(url, headers=headers) as resp:
+    timeout = aiohttp.ClientTimeout(total=20.0)
+    async with session.get(url, headers=headers, timeout=timeout) as resp:
         if resp.status != 200:
             logger.warning("CertTransparency returned %s for niche=%s city=%s country=%s", resp.status, niche, city, country)
             return None

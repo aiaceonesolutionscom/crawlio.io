@@ -43,8 +43,9 @@ async def _fetch_wikipedia(niche: str, city: str, country: str, session: aiohttp
     }
 
     headers = {"User-Agent": "crawlio/0.1.0 (discovery; +https://crawlio.io)"}
+    timeout = aiohttp.ClientTimeout(total=30.0)
 
-    async with session.get(WIKIPEDIA_API_ENDPOINT, params=params, headers=headers) as resp:
+    async with session.get(WIKIPEDIA_API_ENDPOINT, params=params, headers=headers, timeout=timeout) as resp:
         if resp.status != 200:
             logger.warning(
                 "Wikipedia API returned %s for niche=%r city=%r country=%r",
@@ -80,7 +81,7 @@ async def _fetch_wikipedia(niche: str, city: str, country: str, session: aiohttp
                     "titles": title,
                 }
                 async with session.get(
-                    WIKIPEDIA_API_ENDPOINT, params=extract_params, headers=headers
+                    WIKIPEDIA_API_ENDPOINT, params=extract_params, headers=headers, timeout=timeout
                 ) as resp2:
                     if resp2.status != 200:
                         continue

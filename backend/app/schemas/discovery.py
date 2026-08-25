@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.lead import LeadRead
 
@@ -14,6 +14,20 @@ class DiscoverRequest(BaseModel):
     lat: Optional[float] = None
     lon: Optional[float] = None
     limit: Optional[int] = None  # how many results the user wants; capped server-side by plan
+    # User permission filters - control which sources/fields to scrape
+    enable_website_scraping: bool = True
+    enable_social_media: bool = False  # Instagram, LinkedIn, etc.
+    enable_phone_enrichment: bool = True
+    enable_email_enrichment: bool = True
+    enable_address_enrichment: bool = True
+    # Source permissions
+    use_google_maps: bool = True
+    use_osm: bool = True
+    use_directories: bool = True
+    use_tavily: bool = True
+    # Location and category filters
+    location_filter: Optional[str] = None  # Additional location filter (e.g., neighborhood, district)
+    category_filter: Optional[str] = None  # Specific category filter within niche
 
 
 class DiscoveredLead(BaseModel):
@@ -48,6 +62,15 @@ class DiscoveredLead(BaseModel):
     # requesting workspace's CRM — lets a repeat search show what's actually
     # new instead of looking like a frozen re-run of the same list.
     already_in_workspace: bool = False
+    # Source traceability
+    source_url: Optional[str] = None
+    scraped_at: Optional[str] = None
+    validation_status: Optional[str] = None  # verified, unverified, invalid, unavailable
+    # Field-level validation status
+    phone_verified: bool = False
+    email_verified: bool = False
+    website_verified: bool = False
+    address_verified: bool = False
 
 
 class DiscoverResponse(BaseModel):

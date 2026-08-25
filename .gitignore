@@ -44,3 +44,20 @@ backend/.mypy_cache/
 *.njsproj
 *.sln
 *.sw?
+
+# Local scratch/test scripts (session artifacts)
+backend/clean_lookup.py
+backend/fix_lookup.py
+backend/fixed_lookup_func.py
+backend/gmaps_page.html
+backend/test_browser.py
+backend/test_contact2.py
+backend/test_contact_urls.py
+backend/test_debug2.py
+backend/test_enrich.py
+backend/test_gbp.py
+backend/test_gmaps_debug.py
+backend/test_gmaps_debug2.py
+backend/test_gmaps_html.py
+backend/test_live.py
+backend/test_website.py

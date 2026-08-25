@@ -10,14 +10,14 @@ from app.services.discovery.scrape_utils import aggregate_contacts, discover_con
 
 logger = logging.getLogger(__name__)
 
-SCRAPE_TIMEOUT = 8.0
+SCRAPE_TIMEOUT = 60.0
 SCRAPE_HEADERS = {
     # A real browser UA -- some small-business hosting (Wix, GoDaddy sites) 406s
     # bare httpx/requests-style user agents, same class of issue seen with Overpass.
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 }
 # How many same-origin pages (homepage + discovered contact pages) to fetch max.
-MAX_PAGES_PER_SITE = 8
+MAX_PAGES_PER_SITE = 10
 # How many of those subpages to fetch at once -- they're the same origin, so a
 # handful in parallel is a normal browsing pattern, not a burst; this is what
 # actually cuts per-lead wall time instead of paying up to MAX_PAGES_PER_SITE

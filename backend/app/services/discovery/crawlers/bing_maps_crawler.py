@@ -65,7 +65,7 @@ def _record_from_jsonld(item: dict) -> Optional[dict]:
         "source": "bing_maps",
         "social_links": {},
     }
-
+    
 
 def _extract_json_ld(html: str) -> list[dict]:
     """Pull JSON-LD script blocks that describe local businesses."""

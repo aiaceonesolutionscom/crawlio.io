@@ -24,7 +24,7 @@ DISCOVERY_LIMITS: dict[str, int] = {
 # workspace's overall lead_quota.
 DAILY_DISCOVERY_IMPORT_LIMITS: dict[str, int] = {
     "free": 50,
-    "pro": 100,
+    "pro": 200,
     "enterprise": 200,
 }
 

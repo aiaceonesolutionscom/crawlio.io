@@ -45,7 +45,8 @@ async def _fetch_rdap(domain: str, session: aiohttp.ClientSession) -> Optional[d
         "Accept": "application/rdap+json",
         "User-Agent": "crawlio/0.1.0 (discovery; +https://crawlio.io)",
     }
-    async with session.get(query_url, headers=headers) as resp:
+    timeout = aiohttp.ClientTimeout(total=15.0)
+    async with session.get(query_url, headers=headers, timeout=timeout) as resp:
         if resp.status != 200:
             logger.warning("RDAP returned %s for domain=%s", resp.status, domain)
             return None

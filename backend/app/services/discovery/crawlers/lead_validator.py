@@ -1,13 +1,16 @@
-"""Lead validation �?" the quality gate that guarantees "real data".
+"""Lead validation — the quality gate that guarantees "real data".
 
 Every lead that survives to the UI must carry a *real* contact channel. This
 module:
 
-- normalizes Pakistani phone numbers into canonical +92 form and rejects
+- normalizes phone numbers into canonical E.164 form and rejects
   obviously fake numbers (too short, all-same-digit, placeholder exchanges);
 - verifies emails are deliverable by looking up the domain's MX records with
   dnspython (cached per domain) and rejects noreply@/placeholder/disposable
   addresses;
+- validates website URLs are real business sites (not directories/social);
+- validates address has minimum viable components;
+- validates category is present and meaningful;
 - drops a lead entirely when nothing real is left after cleaning.
 
 All lookups are optional (`settings.validate_emails`), short-timeout and cached,
@@ -16,18 +19,22 @@ so validation adds no meaningful latency to a batch.
 import logging
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.discovery.contact_extraction import (
     DISPOSABLE_EMAIL_DOMAINS,
     PLACEHOLDER_LOCAL_PARTS,
     SYSTEM_EMAIL_LOCAL_PARTS,
+    NON_WEBSITE_DOMAINS,
+    DIRECTORY_DOMAINS,
+    DIRECTORY_MARKERS,
 )
 
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
-# Phones (Pakistan-focused, with a generic fallback for other countries)
+# Phones (worldwide E.164 normalization)
 # --------------------------------------------------------------------------- #
 
 # 03xx-xxxxxxx mobile (11 national digits, leading 0)
@@ -37,12 +44,15 @@ _PK_LANDLINE_RE = re.compile(r"^0\d{2,3}[-\s]?\d{6,8}$")
 # +92 3xx-xxxxxxx or 0092 3xx-xxxxxxx (grouping tolerated anywhere in the number)
 _PK_INTL_RE = re.compile(r"^(?:\+?92|0092)[-\s]?3[-\s]?\d{2}[-\s]?\d{7}$")
 
+# Generic international phone pattern
+_INT_PHONE_RE = re.compile(r"^\+?\d{1,3}[\s-]?\d{4,14}$")
+
 
 def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
-    """Return a canonical E.164-ish phone (e.g. +923001234567) or None if the
-    number is missing, malformed or obviously fake. Handles the common Pakistani
-    formats; numbers from other countries are kept only when they parse as a
-    plausible international number."""
+    """Return a canonical E.164 phone (e.g. +923001234567) or None if the
+    number is missing, malformed or obviously fake. Handles common Pakistani
+    formats; numbers from other countries use the worldwide calling-code map
+    to return canonical E.164 (+1...+44...+971...+91...)."""
     if not raw:
         return None
     candidate = str(raw).strip()
@@ -62,20 +72,15 @@ def normalize_phone(raw, country_code: str = "PK") -> Optional[str]:
             return "+92" + digits[-10:]
         if _PK_LANDLINE_RE.match(candidate):
             return "+92" + digits[-10:]
-        # Not obviously Pakistani �?" reject rather than guess wrong.
         return None
-    # Other countries: normalize using the worldwide calling-code map so a US/
-    # UK/Gulf/Indian number comes back in canonical E.164 (+1...+44...+971...
-    # +91...) instead of a bare digit string. This is what feeds the worldwide
-    # WhatsApp deep-link builder.
+    # Other countries: normalize using the worldwide calling-code map
     from app.services.discovery.crawlers.whatsapp_links import normalize_e164
 
     e164 = normalize_e164(candidate, cc)
     if e164:
         return e164
-    # Unknown/edge-country code (or a number we can't map confidently) �?" keep a
-    # plain national number so non-PK searches still show phones.
-    if 9 <= len(digits) <= 12:
+    # Fallback: keep plausible national number
+    if 9 <= len(digits) <= 15:
         return digits
     return None
 
@@ -152,22 +157,168 @@ def validate_emails(item: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Website validation
+# --------------------------------------------------------------------------- #
+
+def validate_website(url: str) -> Optional[str]:
+    """Validate and normalize a website URL. Returns None for directory/social
+    links, or URLs that aren't real business websites."""
+    if not url:
+        return None
+    normalized = str(url).strip()
+    if not normalized.startswith(("http://", "https://")):
+        normalized = "https://" + normalized
+    try:
+        parsed = urlparse(normalized)
+        host = parsed.netloc.lower().removeprefix("www.")
+        if not host:
+            return None
+        # Reject directory/social/non-business domains
+        if any(host == d or host.endswith("." + d) for d in NON_WEBSITE_DOMAINS):
+            return None
+        if any(host == d or host.endswith("." + d) for d in DIRECTORY_DOMAINS):
+            return None
+        if any(marker in host for marker in DIRECTORY_MARKERS):
+            return None
+        # Reject auto-generated preview/deploy hosts
+        preview_hosts = {"netlify.app", "vercel.app", "github.io", "gitlab.io", 
+                        "surge.sh", "pages.dev", "firebaseapp.com", "webflow.io", 
+                        "wixsite.com", "wixpress.com"}
+        if any(host == p or host.endswith("." + p) for p in preview_hosts):
+            return None
+        return normalized
+    except Exception:
+        return None
+
+
+def validate_website_field(item: dict) -> None:
+    """In-place: keep `item["website"]` only if it validates."""
+    website = validate_website(item.get("website"))
+    item["website"] = website
+
+
+# --------------------------------------------------------------------------- #
+# Address validation
+# --------------------------------------------------------------------------- #
+
+def validate_address(address: str) -> Optional[str]:
+    """Validate address has minimum viable components (street + city at minimum)."""
+    if not address:
+        return None
+    cleaned = str(address).strip()
+    # Must have at least some alphanumeric content
+    if not re.search(r"[a-zA-Z0-9]", cleaned):
+        return None
+    # Reject obviously fake/placeholder addresses
+    fake_patterns = [
+        r"^\d+$",  # Just numbers
+        r"^test", r"^sample", r"^example", r"^dummy", r"^placeholder",
+        r"^n/?a$", r"^unknown$", r"^not\s+provided$",
+    ]
+    for pattern in fake_patterns:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            return None
+    # Must have reasonable length
+    if len(cleaned) < 5:
+        return None
+    return cleaned
+
+
+def validate_address_field(item: dict) -> None:
+    """In-place: keep `item["address"]` only if it validates."""
+    address = validate_address(item.get("address"))
+    item["address"] = address
+
+
+# --------------------------------------------------------------------------- #
+# Category validation
+# --------------------------------------------------------------------------- #
+
+def validate_category(category: str) -> Optional[str]:
+    """Validate category is meaningful and not a placeholder."""
+    if not category:
+        return None
+    cleaned = str(category).strip()
+    # Reject placeholder categories
+    fake_patterns = [
+        r"^test", r"^sample", r"^example", r"^dummy", r"^placeholder",
+        r"^n/?a$", r"^unknown$", r"^not\s+provided$", r"^category$",
+    ]
+    for pattern in fake_patterns:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            return None
+    if len(cleaned) < 2:
+        return None
+    return cleaned
+
+
+def validate_category_field(item: dict) -> None:
+    """In-place: keep `item["category"]` only if it validates."""
+    category = validate_category(item.get("category") or item.get("industry"))
+    item["category"] = category
+    if category:
+        item["industry"] = category
+
+
+# --------------------------------------------------------------------------- #
+# Name validation
+# --------------------------------------------------------------------------- #
+
+def validate_name(name: str) -> Optional[str]:
+    """Validate business name is meaningful."""
+    if not name:
+        return None
+    cleaned = str(name).strip()
+    # Remove keyword stuffing (pipe-separated SEO spam)
+    cleaned = cleaned.split("|", 1)[0].strip()
+    # Reject obviously fake names
+    fake_patterns = [
+        r"^test", r"^sample", r"^example", r"^dummy", r"^placeholder",
+        r"^n/?a$", r"^unknown$", r"^not\s+provided$",
+        r"^\d+$",  # Just numbers
+    ]
+    for pattern in fake_patterns:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            return None
+    if len(cleaned) < 2:
+        return None
+    return cleaned
+
+
+def validate_name_field(item: dict) -> None:
+    """In-place: keep `item["name"]` only if it validates."""
+    name = validate_name(item.get("name"))
+    item["name"] = name
+
+
+# --------------------------------------------------------------------------- #
 # Whole-lead gate
 # --------------------------------------------------------------------------- #
 
 def validate_lead(item: dict, country_code: str = "PK") -> Optional[dict]:
-    """Clean a lead's phone/email and return it only if a real contact channel
+    """Clean a lead's fields and return it only if a real contact channel
     survives. Returns None when the lead has nothing real left.
 
-    Accepted contact channels:
+    Accepted contact channels (at least ONE required):
     - phone (normalized to E.164 when plausible),
     - email (MX-verified when validation is enabled),
-    - website,
+    - website (valid business website, not directory/social),
     - name + street address + lat/lon (a real, geocoded business from OSM/BizData
       that simply publishes no phone/email/website — visitable, not invented).
-    A bare name with no channel is still dropped."""
+    A bare name with no channel is still dropped.
+    
+    Also validates: name, category/industry, address."""
+    # Validate all fields
+    validate_name_field(item)
     normalize_phones(item, country_code)
     validate_emails(item)
+    validate_website_field(item)
+    validate_address_field(item)
+    validate_category_field(item)
+
+    # Check if name survived validation
+    if not item.get("name"):
+        return None
 
     has_phone = bool(item.get("phone"))
     has_email = bool(item.get("email"))

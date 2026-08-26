@@ -30,7 +30,6 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onImported: () => void;
-  onWantManualAdd: () => void;
   resultCap: number;
   enhancedTier: boolean;
 }
@@ -39,7 +38,6 @@ export function LeadDiscoveryModal({
   open,
   onClose,
   onImported,
-  onWantManualAdd,
   resultCap,
   enhancedTier
 }: Props) {
@@ -140,13 +138,17 @@ export function LeadDiscoveryModal({
   }, [countryQuery, open, country, getToken]);
 
   useEffect(() => {
-    if (!open || !country || city || cityQuery.trim().length < 2) {
+    // No length gate when the query is empty: picking a country alone should
+    // already surface its known cities instead of an empty dropdown. A single
+    // character is still too short to filter usefully server-side, so that
+    // one case alone is skipped (2+ chars or exactly empty both fetch).
+    if (!open || !country || city || cityQuery.trim().length === 1) {
       setCityOptions([]);
       return;
     }
     const timeout = window.setTimeout(async () => {
       const token = await getToken();
-      const res = await searchCities(token, country.code, cityQuery);
+      const res = await searchCities(token, country.code, cityQuery.trim());
       setCityOptions(res.items);
     }, 300);
     return () => window.clearTimeout(timeout);
@@ -581,37 +583,25 @@ export function LeadDiscoveryModal({
                 </div>
               </div>
 
-              {desiredCount === 0 ? (
-                <div className="flex flex-col gap-3 rounded-lg border border-ink-800 bg-ink-850/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-[12.5px] text-chalk-faint">
-                    Looking for a specific business you already know? Search isn't useful with 0 results — add it
-                    directly instead.
-                  </p>
-                  <Button size="sm" variant="outline" onClick={onWantManualAdd}>
-                    Add lead manually
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-3">
-                  <p className={cn('text-[12.5px]', isSearching ? 'text-signal' : 'text-chalk-faint')}>
-                    {isSearching ? (
-                      searchStage
-                    ) : (
-                      <>
-                        Up to {resultCap} results per search
-                        {enhancedTier ? ' · enhanced with AI-assisted contact lookup' : ''}.
-                        {remainingToday !== null && dailyLimit !== null && (
-                          <> {remainingToday} of {dailyLimit} adds left today.</>
-                        )}
-                      </>
-                    )}
-                  </p>
-                  <Button size="sm" disabled={!canSearch} onClick={() => void handleSearch()}>
-                    {isSearching ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <SearchIcon className="h-4 w-4" />}
-                    {isSearching ? 'Searching…' : 'Search'}
-                  </Button>
-                </div>
-              )}
+              <div className="flex items-center justify-between gap-3">
+                <p className={cn('text-[12.5px]', isSearching ? 'text-signal' : 'text-chalk-faint')}>
+                  {isSearching ? (
+                    searchStage
+                  ) : (
+                    <>
+                      Up to {resultCap} results per search
+                      {enhancedTier ? ' · enhanced with AI-assisted contact lookup' : ''}.
+                      {remainingToday !== null && dailyLimit !== null && (
+                        <> {remainingToday} of {dailyLimit} adds left today.</>
+                      )}
+                    </>
+                  )}
+                </p>
+                <Button size="sm" disabled={!canSearch} onClick={() => void handleSearch()}>
+                  {isSearching ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <SearchIcon className="h-4 w-4" />}
+                  {isSearching ? 'Searching…' : 'Search'}
+                </Button>
+              </div>
 
               {searchError && (
                 <p role="alert" className="rounded-lg border border-ember/40 bg-ember/10 px-3.5 py-2.5 text-[13px] text-ember">

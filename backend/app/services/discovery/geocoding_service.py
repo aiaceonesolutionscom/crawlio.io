@@ -31,6 +31,7 @@ MIN_REQUEST_INTERVAL_SECONDS = 1.1
 
 _cache: dict[str, Optional[dict]] = {}
 _poi_cache: dict[str, list[dict]] = {}
+_city_search_cache: dict[str, list[dict]] = {}
 _lock = asyncio.Lock()
 _last_request_at = 0.0
 
@@ -149,6 +150,64 @@ def _looks_like_address(text: str) -> bool:
     if re.search(r"\d+", lowered):
         return True
     return False
+
+
+async def search_cities_in_country(country_code: str, query: str, limit: int = 8) -> list[dict]:
+    """Real-world city lookup via Nominatim, restricted to one country via
+    `countrycodes` — the fallback for geo_service.search_cities() when its
+    static major-city list has no match. Most of the world's countries either
+    aren't in that curated list at all, or only carry a handful of biggest
+    cities, so this is what makes "every country's real cities" work instead
+    of leaving city autocomplete to guess.
+
+    Never raises and never echoes the raw query back: on any failure or zero
+    matches it returns [], so a query for a city in the wrong country (e.g.
+    "New Delhi" while Country=Pakistan) never shows up as if it were valid —
+    it can only return places Nominatim itself placed inside that country."""
+    query = (query or "").strip()
+    country_code = (country_code or "").strip()
+    if not query or not country_code:
+        return []
+
+    key = _cache_key(f"city:{country_code.lower()}:{query}")
+    async with _lock:
+        if key in _city_search_cache:
+            return [dict(c) for c in _city_search_cache[key]]
+
+        await _throttle()
+        results: list[dict] = []
+        try:
+            async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": USER_AGENT}) as client:
+                resp = await client.get(
+                    NOMINATIM_URL,
+                    params={
+                        "q": query,
+                        "format": "jsonv2",
+                        "countrycodes": country_code.lower(),
+                        "featureType": "settlement",
+                        "limit": limit,
+                        "addressdetails": 0,
+                        "accept-language": "en",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Nominatim city search failed for %r in %s: %s", query, country_code, exc)
+            data = []
+
+        for item in data:
+            name = (item.get("name") or (item.get("display_name") or "").split(",")[0]).strip()
+            try:
+                lat, lon = float(item["lat"]), float(item["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not name:
+                continue
+            results.append({"name": name, "lat": lat, "lon": lon})
+
+        _city_search_cache[key] = results
+        return [dict(c) for c in results]
 
 
 # --- Nominatim POI search (a second, distinct discovery surface over OSM) -------

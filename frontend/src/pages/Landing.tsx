@@ -13,7 +13,7 @@ export function Landing() {
 
   return (
     <div className="w-full bg-ink-950">
-      <SiteHeader primaryColor={settings.primary_color} />
+      <SiteHeader />
       <main>
         <Hero ctaText={settings.cta_text} primaryColor={settings.primary_color} />
         <Features />

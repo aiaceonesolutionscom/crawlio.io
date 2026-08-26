@@ -21,6 +21,6 @@ async def list_countries(
 async def list_cities(
     workspace: Annotated[Workspace, Depends(get_current_workspace)],
     country: str = Query(...),
-    q: str = Query(...),
+    q: str = Query(default=""),
 ):
-    return {"items": geo_service.search_cities(country, q)}
+    return {"items": await geo_service.search_cities(country, q)}

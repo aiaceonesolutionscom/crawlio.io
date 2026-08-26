@@ -68,28 +68,9 @@ export interface CreateLeadInput {
   source?: string;
 }
 
-export interface UpdateLeadInput {
-  name?: string;
-  email?: string;
-  phone?: string;
-  website?: string;
-  address?: string;
-  industry?: string;
-  social_links?: Record<string, string>;
-  status?: LeadStatus;
-  source?: string;
-}
-
 export function createLead(token: string | null, input: CreateLeadInput) {
   return apiFetch<LeadDTO>('/api/v1/leads', token, {
     method: 'POST',
-    body: JSON.stringify(input)
-  });
-}
-
-export function updateLead(token: string | null, id: string, input: UpdateLeadInput) {
-  return apiFetch<LeadDTO>(`/api/v1/leads/${id}`, token, {
-    method: 'PATCH',
     body: JSON.stringify(input)
   });
 }

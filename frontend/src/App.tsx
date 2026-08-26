@@ -14,6 +14,39 @@ import { PlanRedirect } from './routes/PlanRedirect';
 import { AdminSessionProvider } from './contexts/AdminSessionContext';
 import { SiteSettingsProvider } from './shared/hooks/useSiteSettings';
 
+// Footer-linked marketing/legal pages — their own lazy chunk since a signed-in
+// user working the dashboard never needs them.
+const AiQualificationPage = lazy(() =>
+  import('./pages/marketing/ProductPages').then((m) => ({ default: m.AiQualificationPage }))
+);
+const EmailOutreachPage = lazy(() =>
+  import('./pages/marketing/ProductPages').then((m) => ({ default: m.EmailOutreachPage }))
+);
+const WhatsAppAutomationPage = lazy(() =>
+  import('./pages/marketing/ProductPages').then((m) => ({ default: m.WhatsAppAutomationPage }))
+);
+const AutomationBuilderPage = lazy(() =>
+  import('./pages/marketing/ProductPages').then((m) => ({ default: m.AutomationBuilderPage }))
+);
+const AboutPage = lazy(() => import('./pages/marketing/CompanyPages').then((m) => ({ default: m.AboutPage })));
+const CareersPage = lazy(() => import('./pages/marketing/CompanyPages').then((m) => ({ default: m.CareersPage })));
+const BlogPage = lazy(() => import('./pages/marketing/CompanyPages').then((m) => ({ default: m.BlogPage })));
+const ContactSalesPage = lazy(() =>
+  import('./pages/marketing/CompanyPages').then((m) => ({ default: m.ContactSalesPage }))
+);
+const DocsPage = lazy(() => import('./pages/marketing/ResourcePages').then((m) => ({ default: m.DocsPage })));
+const ApiReferencePage = lazy(() =>
+  import('./pages/marketing/ResourcePages').then((m) => ({ default: m.ApiReferencePage }))
+);
+const ChangelogPage = lazy(() =>
+  import('./pages/marketing/ResourcePages').then((m) => ({ default: m.ChangelogPage }))
+);
+const StatusPage = lazy(() => import('./pages/marketing/ResourcePages').then((m) => ({ default: m.StatusPage })));
+const PrivacyPage = lazy(() => import('./pages/marketing/LegalPages').then((m) => ({ default: m.PrivacyPage })));
+const TermsPage = lazy(() => import('./pages/marketing/LegalPages').then((m) => ({ default: m.TermsPage })));
+const DpaPage = lazy(() => import('./pages/marketing/LegalPages').then((m) => ({ default: m.DpaPage })));
+const SecurityPage = lazy(() => import('./pages/marketing/LegalPages').then((m) => ({ default: m.SecurityPage })));
+
 // Admin is its own lazy chunk, entirely separate from the tier bundles below —
 // a normal customer session never downloads it.
 const AdminHomeRedirect = lazy(() =>
@@ -87,6 +120,23 @@ export function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/login/*" element={<Login />} />
             <Route path="/signup/*" element={<Signup />} />
+
+            <Route path="/product/ai-qualification" element={<AiQualificationPage />} />
+            <Route path="/product/email-outreach" element={<EmailOutreachPage />} />
+            <Route path="/product/whatsapp-automation" element={<WhatsAppAutomationPage />} />
+            <Route path="/product/automation-builder" element={<AutomationBuilderPage />} />
+            <Route path="/about" element={<AboutPage />} />
+            <Route path="/careers" element={<CareersPage />} />
+            <Route path="/blog" element={<BlogPage />} />
+            <Route path="/contact-sales" element={<ContactSalesPage />} />
+            <Route path="/docs" element={<DocsPage />} />
+            <Route path="/api-reference" element={<ApiReferencePage />} />
+            <Route path="/changelog" element={<ChangelogPage />} />
+            <Route path="/status" element={<StatusPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/dpa" element={<DpaPage />} />
+            <Route path="/security" element={<SecurityPage />} />
 
             <Route path="/app" element={<RequireAuth><PlanRedirect /></RequireAuth>} />
             <Route path="/select-plan" element={<RequireAuth><SelectPlan /></RequireAuth>} />

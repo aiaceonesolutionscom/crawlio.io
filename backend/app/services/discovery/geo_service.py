@@ -9,10 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 def _is_real_coord(city: dict) -> bool:
-    # search_cities() passes through an unmatched free-text query as a
-    # {"name": q, "lat": 0.0, "lon": 0.0} placeholder — (0, 0) is "Null
-    # Island", never a real business location, so it must never be treated
-    # as a real coordinate for distance math.
+    # (0, 0) is "Null Island", never a real business location — guards any
+    # static CITIES entry missing real coordinates from distance math.
     return not (city.get("lat") == 0.0 and city.get("lon") == 0.0)
 
 
@@ -45,23 +43,37 @@ def country_name_for_code(code: str) -> Optional[str]:
     return None
 
 
-def search_cities(country_code: str, query: str, limit: int = 8) -> list[dict]:
-    """City autocomplete from a static major-city list — no geocoding service.
-    Coordinates are approximate (kept only for the API shape; discovery is
-    web-based and ignores them). If the country or city isn't in the list, the
-    typed query is passed through as a free-text city so any location still
-    works for a web search."""
+async def search_cities(country_code: str, query: str, limit: int = 8) -> list[dict]:
+    """City autocomplete for one country. Checks the static major-city list
+    first (instant, no network); when that has nothing — most of the 187
+    supported countries aren't in it at all, and even listed ones only carry
+    a handful of biggest cities — falls back to a live Nominatim lookup
+    scoped to that exact country (geocoding_service.search_cities_in_country).
+
+    Never echoes the raw query back as if it were a validated city: doing
+    that previously let any typed text pass as a "city" for any country (e.g.
+    typing "New Delhi" while Country=Pakistan showed it as a Pakistani city
+    suggestion). No match anywhere now means no suggestion, not a fake one.
+
+    An empty query returns the country's known major cities unfiltered, so
+    picking a country alone (before typing anything) already surfaces real
+    cities to choose from."""
     q = (query or "").strip()
+    city_list = CITIES.get(country_code.upper(), [])
+
+    if not q:
+        return city_list[:limit]
     if len(q) < 2:
         return []
 
-    city_list = CITIES.get(country_code.upper(), [])
     matches = [c for c in city_list if c["name"].lower().startswith(q.lower())]
     if not matches:
         matches = [c for c in city_list if q.lower() in c["name"].lower()]
     if matches:
         return matches[:limit]
-    return [{"name": q, "lat": 0.0, "lon": 0.0}]
+
+    from app.services.discovery import geocoding_service
+    return await geocoding_service.search_cities_in_country(country_code, q, limit)
 
 
 def city_center(country_code: str, city_name: str) -> Optional[dict]:

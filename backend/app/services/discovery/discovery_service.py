@@ -75,17 +75,22 @@ _TAVILY_MIN_TOPUP = 8
 _SOURCE_TIMEOUT = 12.0
 
 # Google Maps is the primary, richest source (phone + website + rating) but is
-# also the slowest: a Playwright crawl needs ~40s+ for a useful panel set. It
-# gets its own dedicated budget so the 12s fast-source guard doesn't cancel it
-# mid-crawl (which previously starved every search to ~13-19 leads).
-_MAPS_TIMEOUT = 55.0
+# also the slowest: a Playwright crawl needs ~40s+ for a useful panel set, and
+# running concurrently with the other sources (shared event loop/CPU) routinely
+# pushes a real, successful crawl past 55s — which was cancelling it outright
+# and (combined with OSM's own timeout below) leaving zero sources engaged, so
+# every search failed with "temporarily unavailable" even though Maps was
+# actually working. Budget raised so a real crawl gets to finish.
+_MAPS_TIMEOUT = 90.0
 
-# OSM/Overpass races several mirrors against a free shared API; a single query
-# routinely takes ~15-25s to come back (mirrors 504/429 under load). It is the
-# most reliable volume source, so it also gets a dedicated budget instead of the
-# 12s fast-source guard that kept cancelling it and collapsing searches to
-# directory+bizdata only (~18 leads).
-_OSM_TIMEOUT = 45.0
+# OSM/Overpass races several mirrors against a free shared API using its own
+# progressive-timeout ladder (10s -> 20s -> 30s per attempt, see
+# overpass_service._run_overpass_query) which can legitimately take up to ~65s
+# end-to-end on a bad round. A 45s budget guaranteed a mid-ladder cutoff on any
+# search where the fastest mirrors didn't answer instantly. Raised past the
+# ladder's own worst case so a query that's genuinely working isn't cancelled
+# before it can return.
+_OSM_TIMEOUT = 75.0
 
 # Hard wall-clock deadline for the entire discovery request. The fallback
 # ladder (synonyms -> nearby cities -> country-wide top cities) is valuable on

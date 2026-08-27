@@ -10,6 +10,7 @@ import {
 import { cn } from '../../utils/cn';
 import { formatSender, getSenderFromEmail, parseSender } from '../../utils/sender';
 import { khiTime } from '../../utils/time';
+import { sanitizeEmailHtml } from '../../utils/sanitizeHtml';
 import {
   listEmailAccounts,
   getGoogleAuthUrl,
@@ -1353,7 +1354,7 @@ export function EmailAgentPage({ backTo }: Props) {
                           </div>
                           <div
                             className="rounded-lg border border-ink-800 bg-ink-950 p-2.5 text-[12px] text-chalk-dim"
-                            dangerouslySetInnerHTML={{ __html: previewDraft.body }}
+                            dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(previewDraft.body) }}
                           />
                           <div className="flex justify-end gap-1.5">
                             <button onClick={() => setConversationStep('conversation')} className="flex h-7 items-center gap-1 rounded-lg border border-ink-700 bg-ink-850 px-2.5 text-[11px] text-chalk hover:border-ink-600">

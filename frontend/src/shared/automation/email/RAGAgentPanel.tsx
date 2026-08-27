@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@clerk/clerk-react';
 import { Loader2Icon, SendIcon, StopCircleIcon, PlayIcon, SparklesIcon, CheckIcon } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { sanitizeEmailHtml } from '../../utils/sanitizeHtml';
 import {
   initializeAgent,
   sendAgentMessage,
@@ -268,7 +269,7 @@ export function RAGAgentPanel({ emailAccountId, leadId, leadName, leadCompany, l
               <p className="text-[11px] text-chalk-faint">Body</p>
               <div
                 className="mt-1 rounded-lg border border-ink-700 bg-ink-950 p-3 text-[12px] text-chalk-dim max-h-40 overflow-y-auto"
-                dangerouslySetInnerHTML={{ __html: previewDraft.body }}
+                dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(previewDraft.body) }}
               />
             </div>
           </div>

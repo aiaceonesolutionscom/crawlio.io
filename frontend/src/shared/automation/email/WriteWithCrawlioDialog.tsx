@@ -4,6 +4,7 @@ import { XIcon, Loader2Icon, SparklesIcon, CheckIcon, UserIcon } from 'lucide-re
 import { motion, AnimatePresence } from 'framer-motion';
 import { generateAIEmail, approveAIEmail, checkAccountQuota, type EmailAccountDTO, type EmailDraftDTO, type EmailQuotaDTO } from '../../../lib/api/emailAgent';
 import { ApiError } from '../../../lib/api/client';
+import { sanitizeEmailHtml } from '../../utils/sanitizeHtml';
 import { SelectCrmLeadsDialog } from './SelectCrmLeadsDialog';
 
 interface Props {
@@ -169,7 +170,7 @@ export function WriteWithCrawlioDialog({ open, onClose, selectedAccount }: Props
                           <p className="text-[11px] text-chalk-faint">Body</p>
                           <div
                             className="mt-1 rounded-lg border border-ink-700 bg-ink-950 p-3 text-[13px] text-chalk-dim"
-                            dangerouslySetInnerHTML={{ __html: generatedDraft.body }}
+                            dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(generatedDraft.body) }}
                           />
                         </div>
                       </div>

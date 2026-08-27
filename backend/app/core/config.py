@@ -121,5 +121,28 @@ class Settings(BaseSettings):
     admin_jwt_secret: str = "crawlio-admin-jwt-secret-change-in-production"
     admin_jwt_expire_hours: int = 24
 
+    # Billing — Stripe (international cards) and Safepay (Pakistan-local:
+    # cards + JazzCash/EasyPaisa). Self-serve checkout only exists for the Pro
+    # plan; Enterprise stays a sales-quoted, admin-granted plan. Both are
+    # no-ops (checkout endpoint returns a clear error) until their keys are
+    # set — safe to leave unset in dev.
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+
+    safepay_environment: str = "sandbox"  # "sandbox" | "production"
+    safepay_secret_key: str = ""  # merchant_api_key, sec_... — server-side only
+    safepay_beacon_key: str = ""  # public "beacon" key used in the hosted checkout redirect URL
+    safepay_webhook_secret: str = ""
+
+    billing_success_url: str = "http://localhost:5173/billing/success"
+    billing_cancel_url: str = "http://localhost:5173/billing/cancel"
+    # Base URL for the mock checkout page (see /billing/mock-checkout below) —
+    # used only while a provider's real key is unset, so staging/demo can
+    # exercise the full checkout -> active-subscription flow without real
+    # payment credentials. Automatically stops being used the moment a real
+    # key is set for that provider.
+    frontend_base_url: str = "http://localhost:5173"
+
 
 settings = Settings()

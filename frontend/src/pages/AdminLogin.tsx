@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { ShieldIcon, EyeIcon, EyeOffIcon } from 'lucide-react';
 import { adminLogin } from '../lib/api/admin/auth';
 
@@ -11,7 +10,6 @@ export function AdminLogin() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +18,12 @@ export function AdminLogin() {
     try {
       const res = await adminLogin(username, password);
       localStorage.setItem(ADMIN_TOKEN_KEY, res.token);
-      navigate('/admin/super-admin');
+      // A full navigation (not React Router's client-side navigate) so the
+      // next route's AdminSessionProvider mounts on a fresh page load and
+      // reliably reads the token that was just written — a client-side
+      // transition here was intermittently reading a stale/empty value and
+      // bouncing straight back to this login page.
+      window.location.href = '/admin/super-admin';
     } catch (err: any) {
       setError(err?.message || 'Invalid credentials');
     } finally {

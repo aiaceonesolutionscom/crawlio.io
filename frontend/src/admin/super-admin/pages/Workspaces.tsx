@@ -43,6 +43,27 @@ export function Workspaces() {
     { key: 'name', header: 'Name' },
     { key: 'plan', header: 'Plan' },
     {
+      key: 'billing',
+      header: 'Billing',
+      render: (row) => {
+        if (!row.subscription) {
+          return <span className="text-[11.5px] text-chalk-faint">—</span>;
+        }
+        const sub = row.subscription;
+        return (
+          <div className="space-y-0.5 font-mono text-[11px]">
+            <p className="text-chalk-dim">
+              {sub.provider === 'stripe' ? 'Stripe' : 'Safepay'} · {sub.billing_cycle}
+            </p>
+            <p className={sub.status === 'active' ? 'text-signal' : 'text-chalk-faint'}>{sub.status}</p>
+            {sub.current_period_end && (
+              <p className="text-chalk-faint">renews {new Date(sub.current_period_end).toLocaleDateString()}</p>
+            )}
+          </div>
+        );
+      }
+    },
+    {
       key: 'usage',
       header: 'Usage',
       render: (row) => (

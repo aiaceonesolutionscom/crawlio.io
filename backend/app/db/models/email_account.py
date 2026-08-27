@@ -6,6 +6,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.encrypted_types import EncryptedText
 
 
 def _new_id() -> str:
@@ -25,8 +26,8 @@ class EmailAccount(Base):
     email_address: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     provider: Mapped[str] = mapped_column(String(20), nullable=False)
-    access_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    refresh_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    access_token: Mapped[Optional[str]] = mapped_column(EncryptedText, nullable=True)
+    refresh_token: Mapped[Optional[str]] = mapped_column(EncryptedText, nullable=True)
     token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     daily_sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

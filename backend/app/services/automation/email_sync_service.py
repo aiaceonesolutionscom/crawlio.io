@@ -21,8 +21,8 @@ def _list_cache_key(account_id: str, query: str) -> str:
     return f"{account_id}:{query}"
 
 
-async def get_valid_access_token(account: EmailAccount) -> str:
-    """Get a valid access token, refreshing if expired."""
+async def get_valid_access_token(session: AsyncSession, account: EmailAccount) -> str:
+    """Get a valid access token, refreshing (and persisting the refresh) if expired."""
     if account.token_expires_at:
         expiry = account.token_expires_at
         now = datetime.now(timezone.utc)
@@ -32,7 +32,7 @@ async def get_valid_access_token(account: EmailAccount) -> str:
             return account.access_token
 
     if account.provider == "google":
-        return await email_account_service.refresh_google_token(account)
+        return await email_account_service.refresh_google_token(session, account)
     return account.access_token
 
 
@@ -195,7 +195,7 @@ async def send_gmail_message(
 async def sync_inbox(
     session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
 ) -> tuple[list[dict], bool]:
-    access_token = await get_valid_access_token(account)
+    access_token = await get_valid_access_token(session, account)
     if account.provider == "google":
         return await get_gmail_messages(access_token, "in:inbox", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
@@ -204,7 +204,7 @@ async def sync_inbox(
 async def sync_sent(
     session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
 ) -> tuple[list[dict], bool]:
-    access_token = await get_valid_access_token(account)
+    access_token = await get_valid_access_token(session, account)
     if account.provider == "google":
         return await get_gmail_messages(access_token, "in:sent", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
@@ -213,7 +213,7 @@ async def sync_sent(
 async def sync_trash(
     session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
 ) -> tuple[list[dict], bool]:
-    access_token = await get_valid_access_token(account)
+    access_token = await get_valid_access_token(session, account)
     if account.provider == "google":
         return await get_gmail_messages(access_token, "in:trash", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
@@ -222,14 +222,14 @@ async def sync_trash(
 async def sync_spam(
     session: AsyncSession, account: EmailAccount, page: int = 1, page_size: int = 10, max_total: int = 500
 ) -> tuple[list[dict], bool]:
-    access_token = await get_valid_access_token(account)
+    access_token = await get_valid_access_token(session, account)
     if account.provider == "google":
         return await get_gmail_messages(access_token, "in:spam", page=page, page_size=page_size, max_total=max_total, cache_key=account.id)
     return [], False
 
 
 async def get_email_detail(session: AsyncSession, account: EmailAccount, message_id: str) -> dict:
-    access_token = await get_valid_access_token(account)
+    access_token = await get_valid_access_token(session, account)
     if account.provider == "google":
         return await get_gmail_message_detail(access_token, message_id)
     return {}
@@ -238,7 +238,7 @@ async def get_email_detail(session: AsyncSession, account: EmailAccount, message
 async def send_email_from_account(
     session: AsyncSession, account: EmailAccount, to: str, subject: str, body: str, thread_id: Optional[str] = None
 ) -> dict:
-    access_token = await get_valid_access_token(account)
+    access_token = await get_valid_access_token(session, account)
     if account.provider == "google":
         return await send_gmail_message(access_token, to, subject, body, thread_id=thread_id)
     return {"status": "unsupported"}

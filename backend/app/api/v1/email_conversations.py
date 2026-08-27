@@ -101,6 +101,16 @@ async def stop_conversation(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    from sqlalchemy import select
+    from app.db.models.email_account import EmailConversation
+    result = await session.execute(
+        select(EmailConversation.id).where(
+            EmailConversation.id == conversation_id, EmailConversation.workspace_id == workspace.id
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
     success = await email_conversation_service.stop_conversation(session, conversation_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
@@ -113,6 +123,16 @@ async def resume_conversation(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    from sqlalchemy import select
+    from app.db.models.email_account import EmailConversation
+    result = await session.execute(
+        select(EmailConversation.id).where(
+            EmailConversation.id == conversation_id, EmailConversation.workspace_id == workspace.id
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
     success = await email_conversation_service.resume_conversation(session, conversation_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")

@@ -1,5 +1,6 @@
-import React from 'react';
-import { HeadphonesIcon, KeyRoundIcon, PaletteIcon } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { useAuth } from '@clerk/clerk-react';
+import { HeadphonesIcon, KeyRoundIcon, Loader2Icon, PaletteIcon } from 'lucide-react';
 import { PageHeader } from '../../../shared/layout/PageHeader';
 import { UsageMeter } from '../../../shared/ui/UsageMeter';
 import { Button } from '../../../shared/ui/Button';
@@ -10,6 +11,7 @@ import { useSession } from '../../../contexts/SessionContext';
 import { useDashboardChrome } from '../../../shared/hooks/useDashboardChrome';
 import { planById } from '../../../data/plans';
 import { formatQuota, planLabel } from '../../../utils/plan';
+import { cancelSubscription, getSubscription, type SubscriptionDTO } from '../../../lib/api/billing';
 import type { PlanId } from '../../../types';
 
 const ENTERPRISE_CARDS = [
@@ -22,8 +24,41 @@ interface Props {
 }
 
 export function Settings({ tier }: Props) {
-  const { user } = useSession();
+  const { user, refreshWorkspace } = useSession();
+  const { getToken } = useAuth();
   const { openUpgrade } = useDashboardChrome();
+  const [subscription, setSubscription] = useState<SubscriptionDTO | null>(null);
+  const [isCanceling, setIsCanceling] = useState(false);
+
+  useEffect(() => {
+    if (tier !== 'pro') return;
+    let cancelled = false;
+    (async () => {
+      const token = await getToken();
+      const sub = await getSubscription(token);
+      if (!cancelled) setSubscription(sub);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tier, getToken]);
+
+  const handleCancel = async () => {
+    if (!window.confirm('Cancel your Pro subscription? You’ll keep access until the end of the current period.')) {
+      return;
+    }
+    setIsCanceling(true);
+    try {
+      const token = await getToken();
+      await cancelSubscription(token);
+      const token2 = await getToken();
+      setSubscription(await getSubscription(token2));
+      await refreshWorkspace();
+    } finally {
+      setIsCanceling(false);
+    }
+  };
+
   if (!user) return null;
 
   const { workspace } = user;
@@ -80,6 +115,21 @@ export function Settings({ tier }: Props) {
           <div className="mt-5">
             <UsageMeter label="Leads this cycle" used={workspace.leadsUsed} quota={workspace.leadQuota} />
           </div>
+
+          {tier === 'pro' && subscription && subscription.status === 'active' && (
+            <div className="mt-5 flex flex-col gap-3 border-t border-ink-850 pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-[12.5px] text-chalk-faint">
+                Billed {subscription.billing_cycle} via{' '}
+                {subscription.provider === 'stripe' ? 'card (Stripe)' : 'Safepay'}.
+                {subscription.current_period_end &&
+                  ` Renews ${new Date(subscription.current_period_end).toLocaleDateString()}.`}
+              </p>
+              <Button variant="outline" size="sm" onClick={() => void handleCancel()} disabled={isCanceling}>
+                {isCanceling && <Loader2Icon className="h-3.5 w-3.5 animate-spin" />}
+                {isCanceling ? 'Canceling…' : 'Cancel subscription'}
+              </Button>
+            </div>
+          )}
         </section>
 
         <section aria-labelledby="enterprise-title" className="rounded-2xl border border-ink-800 bg-ink-900 p-5">

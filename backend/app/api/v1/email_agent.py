@@ -2,9 +2,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_workspace, require_plan
+from app.db.models.email_account import EmailAccount, EmailConversation
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
 from app.schemas.email_account import (
@@ -20,16 +22,41 @@ from app.services.automation.email_conversation_service import resume_conversati
 router = APIRouter(prefix="/email-agent", tags=["email-agent"])
 
 
+async def _owned_account_id(session: AsyncSession, account_id: str, workspace_id: str) -> str:
+    """Confirm `account_id` belongs to the caller's workspace before it's used
+    for anything — without this, any workspace could act on any other
+    workspace's connected Gmail account by guessing/observing its id."""
+    result = await session.execute(
+        select(EmailAccount.id).where(EmailAccount.id == account_id, EmailAccount.workspace_id == workspace_id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email account not found")
+    return account_id
+
+
+async def _owned_conversation_id(session: AsyncSession, conversation_id: str, workspace_id: str) -> str:
+    """Same check as `_owned_account_id`, for conversation ids."""
+    result = await session.execute(
+        select(EmailConversation.id).where(
+            EmailConversation.id == conversation_id, EmailConversation.workspace_id == workspace_id
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    return conversation_id
+
+
 @router.post("/initialize", response_model=EmailConversationRead)
 async def initialize_agent(
     input: EmailAgentInitializeRequest,
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    email_account_id = await _owned_account_id(session, input.email_account_id, workspace.id)
     conversation = await email_ai_service.initialize_agent_session(
         session=session,
         workspace_id=workspace.id,
-        email_account_id=input.email_account_id,
+        email_account_id=email_account_id,
         lead_id=input.lead_id,
         subject=input.subject,
         lead_name=input.lead_name,
@@ -46,6 +73,7 @@ async def process_inbound(
 ):
     """Sync-based auto-agent: fetch inbox and auto-respond to any new customer
     replies on active AI conversations. Called after an inbox refresh."""
+    account_id = await _owned_account_id(session, account_id, workspace.id)
     try:
         result = await email_ai_service.process_inbound_replies_for_account(
             session, account_id
@@ -61,10 +89,11 @@ async def send_agent_message(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    conversation_id = await _owned_conversation_id(session, input.conversation_id, workspace.id)
     try:
         response = await email_ai_service.agent_collect_business_info(
             session=session,
-            conversation_id=input.conversation_id,
+            conversation_id=conversation_id,
             user_input=input.message,
         )
         return {"response": response}
@@ -78,6 +107,7 @@ async def get_conversation_history(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    conversation_id = await _owned_conversation_id(session, conversation_id, workspace.id)
     messages = await email_ai_service.get_agent_conversation_history(
         session, conversation_id
     )
@@ -90,6 +120,7 @@ async def preview_outreach(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    conversation_id = await _owned_conversation_id(session, conversation_id, workspace.id)
     try:
         draft = await email_ai_service.agent_generate_outreach(
             session, conversation_id
@@ -105,6 +136,7 @@ async def approve_outreach(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    conversation_id = await _owned_conversation_id(session, conversation_id, workspace.id)
     try:
         draft = await email_ai_service.agent_generate_outreach(
             session, conversation_id
@@ -121,6 +153,7 @@ async def stop_agent(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    conversation_id = await _owned_conversation_id(session, conversation_id, workspace.id)
     success = await stop_conversation(session, conversation_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
@@ -133,6 +166,7 @@ async def resume_agent(
     workspace: Annotated[Workspace, Depends(require_plan("email_agent"))],
     session: AsyncSession = Depends(get_session),
 ):
+    conversation_id = await _owned_conversation_id(session, conversation_id, workspace.id)
     success = await resume_conversation(session, conversation_id)
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")

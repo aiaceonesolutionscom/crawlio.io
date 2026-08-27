@@ -6,6 +6,9 @@ import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { SelectPlan } from './pages/SelectPlan';
+import { BillingSuccess } from './pages/BillingSuccess';
+import { BillingCancel } from './pages/BillingCancel';
+import { MockCheckoutPage } from './pages/MockCheckoutPage';
 import { AdminLogin } from './pages/AdminLogin';
 import { RequireAuth } from './routes/RequireAuth';
 import { RequirePlan } from './routes/RequirePlan';
@@ -140,6 +143,9 @@ export function App() {
 
             <Route path="/app" element={<RequireAuth><PlanRedirect /></RequireAuth>} />
             <Route path="/select-plan" element={<RequireAuth><SelectPlan /></RequireAuth>} />
+            <Route path="/billing/success" element={<RequireAuth><BillingSuccess /></RequireAuth>} />
+            <Route path="/billing/cancel" element={<RequireAuth><BillingCancel /></RequireAuth>} />
+            <Route path="/billing/mock-checkout/:checkoutId" element={<RequireAuth><MockCheckoutPage /></RequireAuth>} />
 
             <Route
               path="/app/free"

@@ -1,3 +1,6 @@
+import respx
+from httpx import Response
+
 from app.services.discovery import geo_service
 
 
@@ -58,11 +61,48 @@ async def test_list_cities_returns_items_not_a_coroutine_error(authed_client):
     assert isinstance(body["items"], list)
 
 
-async def test_list_cities_falls_back_to_free_text_query(authed_client):
+async def test_list_cities_falls_back_to_live_lookup_scoped_to_country(authed_client):
+    """When the static list has no match, a live Nominatim lookup — scoped to
+    the requested country via countrycodes — fills in, instead of blindly
+    echoing the typed text back as if it were a validated city."""
     await authed_client.post("/api/v1/workspaces", json={"name": "Acme"})
 
-    resp = await authed_client.get("/api/v1/geo/cities", params={"country": "PK", "q": "SomeTownNotInList"})
+    mock_response = [{"name": "SomeRealTown", "lat": "30.0", "lon": "70.0", "display_name": "SomeRealTown, Pakistan"}]
+    with respx.mock:
+        route = respx.get("https://nominatim.openstreetmap.org/search").mock(
+            return_value=Response(200, json=mock_response)
+        )
+        resp = await authed_client.get("/api/v1/geo/cities", params={"country": "PK", "q": "SomeTownNotInList"})
+
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert len(items) == 1
-    assert items[0]["name"] == "SomeTownNotInList"
+    assert items[0]["name"] == "SomeRealTown"
+    assert route.calls[0].request.url.params["countrycodes"] == "pk"
+
+
+async def test_list_cities_never_echoes_raw_query_across_countries(authed_client):
+    """The exact bug being fixed: typing a city from another country (e.g.
+    "New Delhi" while Country=Pakistan) must never show up as a suggestion —
+    it must only ever return places Nominatim actually placed in that
+    country, and empty/failed lookups must return nothing, not the raw text."""
+    await authed_client.post("/api/v1/workspaces", json={"name": "Acme"})
+
+    with respx.mock:
+        respx.get("https://nominatim.openstreetmap.org/search").mock(return_value=Response(200, json=[]))
+        resp = await authed_client.get("/api/v1/geo/cities", params={"country": "PK", "q": "New Delhi"})
+
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+async def test_list_cities_empty_query_returns_country_cities(authed_client):
+    """Selecting a country alone (before typing) should already surface its
+    known cities, not an empty dropdown."""
+    await authed_client.post("/api/v1/workspaces", json={"name": "Acme"})
+
+    resp = await authed_client.get("/api/v1/geo/cities", params={"country": "PK", "q": ""})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) > 0
+    assert all(item["name"] in {c["name"] for c in geo_service.CITIES["PK"]} for item in items)

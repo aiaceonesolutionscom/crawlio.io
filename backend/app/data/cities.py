@@ -7,8 +7,10 @@
 # OpenStreetMap (Overpass + Nominatim) as one of discovery's three sources —
 # that's an unrelated, additive dependency, not something this file provides.
 #
-# search_cities() also passes through a raw typed query when nothing matches
-# (see geo_service), so an uncovered city still works as free text.
+# When a country isn't listed here at all, or the typed query doesn't match
+# any of its listed cities, search_cities() (see geo_service) falls back to a
+# live Nominatim lookup scoped to that exact country — it never echoes the
+# raw typed text back as if it were a validated city.
 CITIES: dict[str, list[dict]] = {
     "PK": [
         # Punjab

@@ -6,9 +6,9 @@ import {
   ChevronRightIcon,
   CompassIcon,
   DownloadIcon,
+  EyeIcon,
   MailIcon,
   MessageSquareIcon,
-  PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -32,7 +32,7 @@ import {
 import { ApiError } from '../../lib/api/client';
 import { cn } from '../utils/cn';
 import { AddLeadModal } from './AddLeadModal';
-import { EditLeadModal } from './EditLeadModal';
+import { LeadDetailsModal } from './LeadDetailsModal';
 import { LeadDiscoveryModal } from './LeadDiscoveryModal';
 import { AiLeadFilterModal } from './AiLeadFilterModal';
 import type { LeadStatus } from '../../types';
@@ -83,7 +83,7 @@ export function LeadCenterPage({
   const [addOpen, setAddOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [aiFilterOpen, setAiFilterOpen] = useState(false);
-  const [editLead, setEditLead] = useState<LeadDTO | null>(null);
+  const [viewLead, setViewLead] = useState<LeadDTO | null>(null);
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
@@ -470,7 +470,7 @@ export function LeadCenterPage({
             {!isLoading && !loadError && leads.map((lead) =>
             <tr
               key={lead.id}
-              onClick={() => setEditLead(lead)}
+              onClick={() => setViewLead(lead)}
               className="cursor-pointer border-b border-ink-850 last:border-0 hover:bg-ink-850/60">
 
                 <td className="px-5 py-4" onClick={(e) => e.stopPropagation()}>
@@ -565,10 +565,10 @@ export function LeadCenterPage({
                     onClick={() => handleWhatsApp(lead)} />
 
                     <IconAction
-                    label={`Edit ${lead.name}`}
-                    icon={PencilIcon}
+                    label={`View ${lead.name}`}
+                    icon={EyeIcon}
                     disabled={busyLeadId === lead.id}
-                    onClick={() => setEditLead(lead)} />
+                    onClick={() => setViewLead(lead)} />
 
                     <IconAction
                     label={`Delete ${lead.name}`}
@@ -625,19 +625,12 @@ export function LeadCenterPage({
         onClose={() => setAddOpen(false)}
         onCreated={() => void refresh(searchEnabled ? query || undefined : undefined, page)} />
 
-      <EditLeadModal
-        lead={editLead}
-        onClose={() => setEditLead(null)}
-        onUpdated={() => void refresh(searchEnabled ? query || undefined : undefined, page)} />
+      <LeadDetailsModal lead={viewLead} onClose={() => setViewLead(null)} />
 
       <LeadDiscoveryModal
         open={discoverOpen}
         onClose={() => setDiscoverOpen(false)}
         onImported={() => void refresh(searchEnabled ? query || undefined : undefined, page)}
-        onWantManualAdd={() => {
-          setDiscoverOpen(false);
-          setAddOpen(true);
-        }}
         resultCap={discoveryCap}
         enhancedTier={discoveryEnhanced} />
 

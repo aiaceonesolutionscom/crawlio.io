@@ -1,14 +1,47 @@
 import React from 'react';
 import { ArrowRightIcon } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { ButtonLink } from '../../shared/ui/Button';
 import { Logo } from '../../shared/ui/Logo';
 import { useSystemSettings } from '../../lib/api/systemSettings';
 
 const COLUMNS = [
-  { title: 'Product', links: ['AI Qualification', 'Email Outreach', 'WhatsApp Automation', 'Automation Builder'] },
-  { title: 'Company', links: ['About', 'Careers', 'Blog', 'Contact sales'] },
-  { title: 'Resources', links: ['Docs', 'API reference', 'Changelog', 'Status'] },
-  { title: 'Legal', links: ['Privacy', 'Terms', 'DPA', 'Security'] }
+  {
+    title: 'Product',
+    links: [
+      { label: 'AI Qualification', to: '/product/ai-qualification' },
+      { label: 'Email Outreach', to: '/product/email-outreach' },
+      { label: 'WhatsApp Automation', to: '/product/whatsapp-automation' },
+      { label: 'Automation Builder', to: '/product/automation-builder' }
+    ]
+  },
+  {
+    title: 'Company',
+    links: [
+      { label: 'About', to: '/about' },
+      { label: 'Careers', to: '/careers' },
+      { label: 'Blog', to: '/blog' },
+      { label: 'Contact sales', to: '/contact-sales' }
+    ]
+  },
+  {
+    title: 'Resources',
+    links: [
+      { label: 'Docs', to: '/docs' },
+      { label: 'API reference', to: '/api-reference' },
+      { label: 'Changelog', to: '/changelog' },
+      { label: 'Status', to: '/status' }
+    ]
+  },
+  {
+    title: 'Legal',
+    links: [
+      { label: 'Privacy', to: '/privacy' },
+      { label: 'Terms', to: '/terms' },
+      { label: 'DPA', to: '/dpa' },
+      { label: 'Security', to: '/security' }
+    ]
+  }
 ];
 
 export function SiteFooter() {
@@ -43,10 +76,10 @@ export function SiteFooter() {
               <h3 className="font-mono text-[11px] uppercase tracking-[0.16em] text-chalk-faint">{col.title}</h3>
               <ul className="mt-4 space-y-2.5">
                 {col.links.map((link) =>
-                  <li key={link}>
-                    <a href="#product" className="text-[14px] text-chalk-dim transition-colors hover:text-chalk">
-                      {link}
-                    </a>
+                  <li key={link.label}>
+                    <Link to={link.to} className="text-[14px] text-chalk-dim transition-colors hover:text-chalk">
+                      {link.label}
+                    </Link>
                   </li>
                 )}
               </ul>
@@ -55,7 +88,7 @@ export function SiteFooter() {
         </div>
 
         <div className="flex flex-col gap-2 border-t border-ink-850 py-7 text-[12.5px] text-chalk-faint sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} {website_name} — all rights reserved.</p>
+          <p>© {new Date().getFullYear()} {website_name} — all rights reserved. Built by Aceone Solutions.</p>
           <p className="font-mono">Built for revenue teams, not for spreadsheets.</p>
         </div>
       </div>

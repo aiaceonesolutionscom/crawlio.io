@@ -7,11 +7,25 @@ from app.core.admin_deps import require_permission
 from app.core.permissions import PERMISSION_WORKSPACES_READ, PERMISSION_WORKSPACES_WRITE
 from app.db.models.platform_admin import PlatformAdmin
 from app.db.session import get_session
-from app.schemas.admin import AdminWorkspaceRead, AdminWorkspaceUpdate
+from app.schemas.admin import AdminSubscriptionSummary, AdminWorkspaceRead, AdminWorkspaceUpdate
 from app.services.admin import audit_service
+from app.services.billing import billing_service
 from app.services.workspace import workspace_service
 
 router = APIRouter(prefix="/workspaces", tags=["admin:workspaces"])
+
+
+def _attach_subscription(workspace, sub) -> None:
+    workspace.subscription = (
+        AdminSubscriptionSummary(
+            provider=sub.provider,
+            status=sub.status,
+            billing_cycle=sub.billing_cycle,
+            current_period_end=sub.current_period_end,
+        )
+        if sub is not None
+        else None
+    )
 
 
 def _snapshot(workspace) -> dict:
@@ -33,11 +47,15 @@ async def list_workspaces(
 ):
     workspaces = await workspace_service.list_all_workspaces(session, search=search, limit=limit, offset=offset)
     usage = await workspace_service.workspace_usage_counts(session, [w.id for w in workspaces])
+    subscriptions = await billing_service.get_active_subscriptions_for_workspaces(
+        session, [w.id for w in workspaces]
+    )
     for workspace in workspaces:
         counts = usage.get(workspace.id, {"member_count": 0, "lead_count": 0, "email_count": 0})
         workspace.member_count = counts["member_count"]
         workspace.lead_count = counts["lead_count"]
         workspace.email_count = counts["email_count"]
+        _attach_subscription(workspace, subscriptions.get(workspace.id))
     return workspaces
 
 
@@ -53,6 +71,8 @@ async def get_workspace(
     workspace.member_count = counts["member_count"]
     workspace.lead_count = counts["lead_count"]
     workspace.email_count = counts["email_count"]
+    sub = await billing_service.get_active_subscription(session, workspace.id)
+    _attach_subscription(workspace, sub)
     return workspace
 
 

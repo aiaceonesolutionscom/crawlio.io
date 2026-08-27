@@ -76,6 +76,23 @@ async def _test_tavily(api_key: str) -> tuple[bool, str]:
         return False, f"Request failed: {exc}"
 
 
+async def _test_stripe(api_key: str) -> tuple[bool, str]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.stripe.com/v1/balance",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code == 200:
+            mode = "test" if api_key.startswith("sk_test_") else "live"
+            return True, f"Connected to Stripe API ({mode} mode key)."
+        if resp.status_code == 401:
+            return False, "Stripe rejected this key — check it was copied correctly."
+        return False, f"Stripe API returned HTTP {resp.status_code}."
+    except httpx.HTTPError as exc:
+        return False, f"Request failed: {exc}"
+
+
 @dataclass(frozen=True)
 class Integration:
     key: str  # settings attribute name
@@ -138,6 +155,50 @@ INTEGRATIONS: list[Integration] = [
         description="Optional proxy for Google Maps / enrichment crawlers (anti-bot).",
         env_name="PROXY_URL",
         secret=True,
+        test=None,
+    ),
+    Integration(
+        key="stripe_secret_key",
+        label="Stripe secret key",
+        description="Pro plan checkout (international cards). Until this is set, checkout falls back to an in-app test-mode page that never actually charges anyone.",
+        env_name="STRIPE_SECRET_KEY",
+        test=_test_stripe,
+    ),
+    Integration(
+        key="stripe_publishable_key",
+        label="Stripe publishable key",
+        description="Safe for client-side use — not required for Checkout redirect flow, kept for future use.",
+        env_name="STRIPE_PUBLISHABLE_KEY",
+        secret=False,
+        test=None,
+    ),
+    Integration(
+        key="stripe_webhook_secret",
+        label="Stripe webhook secret",
+        description="Verifies that /billing/webhooks/stripe calls really came from Stripe. Get it from the Stripe dashboard's webhook endpoint settings.",
+        env_name="STRIPE_WEBHOOK_SECRET",
+        test=None,
+    ),
+    Integration(
+        key="safepay_secret_key",
+        label="Safepay secret key",
+        description="Pro plan checkout (Pakistan — cards, JazzCash, EasyPaisa). Until this is set, checkout falls back to an in-app test-mode page that never actually charges anyone.",
+        env_name="SAFEPAY_SECRET_KEY",
+        test=None,
+    ),
+    Integration(
+        key="safepay_beacon_key",
+        label="Safepay beacon key",
+        description="Public key used to build the hosted checkout redirect URL.",
+        env_name="SAFEPAY_BEACON_KEY",
+        secret=False,
+        test=None,
+    ),
+    Integration(
+        key="safepay_webhook_secret",
+        label="Safepay webhook secret",
+        description="Verifies that /billing/webhooks/safepay calls really came from Safepay.",
+        env_name="SAFEPAY_WEBHOOK_SECRET",
         test=None,
     ),
 ]

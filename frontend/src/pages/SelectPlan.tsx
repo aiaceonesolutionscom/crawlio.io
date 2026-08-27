@@ -6,17 +6,31 @@ import { Logo } from '../shared/ui/Logo';
 import { PLANS } from '../data/plans';
 import { cn } from '../shared/utils/cn';
 import { useSession } from '../contexts/SessionContext';
+import { CheckoutPicker } from '../shared/billing/CheckoutPicker';
 import type { PlanId } from '../types';
 
 /** Mandatory post-signup step: a workspace exists on "free" the moment it's
  * created, but the owner hasn't confirmed a plan yet — RequirePlan/PlanRedirect
- * bounce here until they do, so /app can never be reached by accident. */
+ * bounce here until they do, so /app can never be reached by accident.
+ * Free is instant (no payment); Pro reveals CheckoutPicker inline and only
+ * actually changes plan once Stripe/Safepay confirms payment via webhook;
+ * Enterprise is sales-quoted, no self-serve path. */
 export function SelectPlan() {
   const navigate = useNavigate();
   const { user, changePlan, logout } = useSession();
   const [loading, setLoading] = useState<PlanId | null>(null);
+  const [showProCheckout, setShowProCheckout] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
 
   const handleSelect = async (plan: PlanId) => {
+    if (plan === 'pro') {
+      setShowProCheckout(true);
+      return;
+    }
+    if (plan === 'enterprise') {
+      navigate('/contact-sales');
+      return;
+    }
     setLoading(plan);
     try {
       await changePlan(plan);
@@ -111,6 +125,17 @@ export function SelectPlan() {
             );
           })}
         </div>
+
+        {showProCheckout && (
+          <div className="mx-auto mt-6 max-w-md">
+            <CheckoutPicker onError={setCheckoutError} />
+            {checkoutError && (
+              <p role="alert" className="mt-2 text-[12.5px] text-ember">
+                {checkoutError}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

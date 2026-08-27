@@ -78,6 +78,13 @@ class PlanConfigUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class AdminSubscriptionSummary(BaseModel):
+    provider: str
+    status: str
+    billing_cycle: str
+    current_period_end: Optional[datetime]
+
+
 class AdminWorkspaceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -91,6 +98,7 @@ class AdminWorkspaceRead(BaseModel):
     member_count: int = 0
     lead_count: int = 0
     email_count: int = 0
+    subscription: Optional[AdminSubscriptionSummary] = None
 
 
 class AdminWorkspaceUpdate(BaseModel):

@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@clerk/clerk-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckIcon, Loader2Icon, XIcon } from 'lucide-react';
-import { Button } from './Button';
+import { Button, ButtonLink } from './Button';
 import { useSession } from '../../contexts/SessionContext';
 import { PLANS } from '../../data/plans';
 import { cn } from '../utils/cn';
+import { CheckoutPicker } from '../billing/CheckoutPicker';
+import { cancelSubscription } from '../../lib/api/billing';
 import type { PlanId } from '../../types';
 
 interface Props {
@@ -13,18 +16,25 @@ interface Props {
   onClose: () => void;
 }
 
-/** Calls the real PATCH /workspaces/{id}/plan endpoint. Redirect to the new tier's route root only fires after changePlan's setWorkspace has resolved, so RequirePlan on the new route sees the updated plan immediately instead of bouncing back. */
+/** Free <-> Free/downgrade still calls the real PATCH /workspaces/{id}/plan
+ * endpoint directly (no payment involved). Selecting Pro instead hands off
+ * to CheckoutPicker, which redirects to Stripe/Safepay — the plan only
+ * actually changes once their webhook confirms payment. Enterprise has no
+ * self-serve path at all; it's sales-quoted. */
 export function UpgradeModal({ open, onClose }: Props) {
   const { user, changePlan } = useSession();
+  const { getToken } = useAuth();
   const navigate = useNavigate();
   const currentPlan = user?.workspace.plan ?? 'free';
   const [selected, setSelected] = useState<PlanId>(currentPlan === 'free' ? 'pro' : currentPlan);
   const [status, setStatus] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
+  const [checkoutError, setCheckoutError] = useState('');
 
   useEffect(() => {
     if (open) {
       setSelected(currentPlan === 'free' ? 'pro' : currentPlan);
       setStatus('idle');
+      setCheckoutError('');
     }
   }, [open, currentPlan]);
 
@@ -36,14 +46,22 @@ export function UpgradeModal({ open, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const confirm = async () => {
+  const confirmFree = async () => {
     setStatus('saving');
     try {
-      await changePlan(selected);
+      if (currentPlan !== 'free') {
+        const token = await getToken();
+        try {
+          await cancelSubscription(token);
+        } catch {
+          // No active paid subscription to cancel — fine, proceed to downgrade.
+        }
+      }
+      await changePlan('free');
       setStatus('done');
       window.setTimeout(() => {
         onClose();
-        navigate(`/app/${selected}`, { replace: true });
+        navigate('/app/free', { replace: true });
       }, 500);
     } catch {
       setStatus('error');
@@ -123,6 +141,17 @@ export function UpgradeModal({ open, onClose }: Props) {
 
               })}
               </div>
+
+              {selected === 'pro' && selected !== currentPlan && (
+                <div className="mt-4">
+                  <CheckoutPicker onError={setCheckoutError} />
+                  {checkoutError && (
+                    <p role="alert" className="mt-2 text-[12.5px] text-ember">
+                      {checkoutError}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-3 border-t border-ink-850 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
@@ -131,21 +160,32 @@ export function UpgradeModal({ open, onClose }: Props) {
               'Something went wrong updating your plan — try again.' :
               selected === 'enterprise' ?
               'Enterprise is quoted — our team will reach out within one business day.' :
+              selected === 'pro' && selected !== currentPlan ?
+              'Pick a billing cycle and payment method above to continue.' :
               'Quotas update immediately on this workspace.'}
               </p>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={onClose}>
-                  Cancel
+                  {selected === 'pro' && selected !== currentPlan ? 'Cancel' : 'Close'}
                 </Button>
-                <Button onClick={confirm} disabled={status === 'saving' || status === 'done' || selected === currentPlan}>
-                  {status === 'saving' && <Loader2Icon className="h-4 w-4 animate-spin" />}
-                  {status === 'done' && <CheckIcon className="h-4 w-4" />}
-                  {status === 'idle' || status === 'error' ?
-                `Switch to ${selected === 'pro' ? 'Pro' : selected === 'enterprise' ? 'Enterprise' : 'Free'}` :
-                status === 'saving' ?
-                'Updating…' :
-                'Plan updated'}
-                </Button>
+                {selected === 'enterprise' && selected !== currentPlan ? (
+                  <ButtonLink to="/contact-sales" onClick={onClose}>
+                    Contact sales
+                  </ButtonLink>
+                ) : selected === 'pro' && selected !== currentPlan ? null : (
+                  <Button
+                    onClick={confirmFree}
+                    disabled={status === 'saving' || status === 'done' || selected === currentPlan}
+                  >
+                    {status === 'saving' && <Loader2Icon className="h-4 w-4 animate-spin" />}
+                    {status === 'done' && <CheckIcon className="h-4 w-4" />}
+                    {status === 'idle' || status === 'error' ?
+                  'Switch to Free' :
+                  status === 'saving' ?
+                  'Updating…' :
+                  'Plan updated'}
+                  </Button>
+                )}
               </div>
             </div>
           </motion.div>

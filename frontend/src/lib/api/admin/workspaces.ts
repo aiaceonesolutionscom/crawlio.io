@@ -1,5 +1,12 @@
 import { apiFetch } from '../client';
 
+export interface AdminSubscriptionSummaryDTO {
+  provider: 'stripe' | 'safepay';
+  status: string;
+  billing_cycle: 'monthly' | 'yearly';
+  current_period_end: string | null;
+}
+
 export interface AdminWorkspaceDTO {
   id: string;
   name: string;
@@ -11,6 +18,7 @@ export interface AdminWorkspaceDTO {
   member_count: number;
   lead_count: number;
   email_count: number;
+  subscription: AdminSubscriptionSummaryDTO | null;
 }
 
 export interface AdminWorkspaceUpdateInput {

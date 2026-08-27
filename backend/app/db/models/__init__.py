@@ -17,6 +17,7 @@ from app.db.models.lead import Lead, LeadEvent
 from app.db.models.plan_config import PlanConfig
 from app.db.models.platform_admin import PlatformAdmin
 from app.db.models.sequence import Sequence, SequenceStep
+from app.db.models.subscription import Subscription
 from app.db.models.system_setting import SystemSetting
 from app.db.models.whatsapp import (
     WhatsAppAccount,
@@ -58,6 +59,7 @@ __all__ = [
     "SystemSetting",
     "AuditLog",
     "DiscoveryCache",
+    "Subscription",
     "WhatsAppAccount",
     "WhatsAppConversation",
     "WhatsAppConversationMessage",

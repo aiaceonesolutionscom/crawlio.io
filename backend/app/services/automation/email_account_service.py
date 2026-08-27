@@ -41,7 +41,7 @@ async def exchange_google_code(code: str) -> dict:
         return resp.json()
 
 
-async def refresh_google_token(account: EmailAccount) -> str:
+async def refresh_google_token(session: AsyncSession, account: EmailAccount) -> str:
     if not account.refresh_token:
         raise RuntimeError("No refresh token available")
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -56,7 +56,18 @@ async def refresh_google_token(account: EmailAccount) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["access_token"]
+
+    # Persist the refreshed token so the next call doesn't re-hit Google's
+    # token endpoint for a token that's actually still valid — previously
+    # this was refreshed in-memory only and never saved, so every request
+    # after the old token expired re-refreshed from scratch every time.
+    account.access_token = data["access_token"]
+    account.token_expires_at = datetime.now(timezone.utc).replace(
+        second=0, microsecond=0
+    ) + timedelta(seconds=data.get("expires_in", 3600))
+    await session.commit()
+    await session.refresh(account)
+    return account.access_token
 
 
 async def get_google_user_info(access_token: str) -> dict:

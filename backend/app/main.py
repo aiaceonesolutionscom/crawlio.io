@@ -26,6 +26,8 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.middleware import PrivateNetworkAccessMiddleware
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -43,6 +45,23 @@ async def _lifespan(app: FastAPI):
             await ensure_default_settings(session)
 
     await _seed()
+
+    # A production run still using the checked-in default admin credentials
+    # is a real account-takeover risk (see login rate limiting above — that
+    # slows brute force, it doesn't fix a known password). Loud, not fatal:
+    # this must never block a legitimate dev/staging boot.
+    if settings.env != "development":
+        if settings.admin_password == "crawlio2026":
+            logger.critical(
+                "SECURITY: ADMIN_PASSWORD is still the default value. Set a real "
+                "ADMIN_PASSWORD env var before exposing this to the internet."
+            )
+        if settings.admin_jwt_secret == "crawlio-admin-jwt-secret-change-in-production":
+            logger.critical(
+                "SECURITY: ADMIN_JWT_SECRET is still the default value. Set a real "
+                "ADMIN_JWT_SECRET env var before exposing this to the internet."
+            )
+
     yield
 
 
